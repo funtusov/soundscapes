@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>EtherPad Soundscape</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #050505;
+            touch-action: none; /* Critical for mobile */
+            font-family: 'Courier New', Courier, monospace;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            z-index: 20;
+            transition: opacity 0.5s;
+        }
+
+        #overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .btn {
+            padding: 15px 30px;
+            border: 1px solid #00ffcc;
+            color: #00ffcc;
+            background: transparent;
+            font-size: 1.2rem;
+            cursor: pointer;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            transition: all 0.3s ease;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .btn:active, .btn:hover {
+            background: #00ffcc;
+            color: #000;
+            box-shadow: 0 0 15px #00ffcc;
+        }
+
+        .hud {
+            position: absolute;
+            pointer-events: none;
+            color: rgba(255, 255, 255, 0.4);
+            font-size: 0.8rem;
+            padding: 10px;
+            text-shadow: 0 1px 2px black;
+            z-index: 10;
+        }
+        
+        .hud-tl { top: 10px; left: 10px; }
+        .hud-tr { top: 10px; right: 10px; text-align: right; }
+        .hud-bl { bottom: 10px; left: 10px; }
+        .hud-br { bottom: 10px; right: 10px; text-align: right; }
+
+    </style>
+</head>
+<body>
+
+    <!-- Start Overlay -->
+    <div id="overlay">
+        <h1 class="text-3xl mb-2 font-light tracking-widest text-white">ETHERPAD</h1>
+        <p class="mb-8 text-gray-400 text-sm">Headphones Recommended</p>
+        <button id="startBtn" class="btn">Initialize System</button>
+    </div>
+
+    <!-- HUD Elements -->
+    <div class="hud hud-tl">
+        FREQ: <span id="val-freq">0</span> Hz<br>
+        FILT: <span id="val-tilt">--</span>
+    </div>
+    <div class="hud hud-tr">
+        SERIES: <span id="val-harm">Pure</span><br>
+        MOTION: <span id="val-motion">--</span>
+    </div>
+    <div class="hud hud-bl">X: Pitch | γ: Pan</div>
+    <div class="hud hud-br">Y: Harmonics | β: Filter</div>
+
+    <canvas id="canvas"></canvas>
+
+    <script>
+        /**
+         * AUDIO ENGINE
+         */
+        class AudioEngine {
+            constructor() {
+                this.ctx = null;
+                this.masterGain = null;
+                this.oscillators = [];
+                this.filter = null;
+                this.panner = null;
+                this.delayFeedback = null;
+                this.lfo = null;
+                this.lfoGain = null;
+                this.analyser = null;
+                this.isPlaying = false;
+                this.dataArray = null;
+
+                // Orientation-controlled parameters
+                this.orientationParams = {
+                    pan: 0,        // -1 to 1 (gamma: left/right tilt)
+                    filterMod: 0,  // 0 to 1 (beta: forward/back tilt)
+                    lfoRate: 0,    // rotation rate controls vibrato
+                    shake: 0       // acceleration magnitude
+                };
+
+                // Silent audio element to force iOS "Media Playback" mode (Bypasses mute switch)
+                this.silentAudio = new Audio("data:audio/mp3;base64,SUQzBAAAAAAAI1RTY29uAAAAPAAAAH//5ExAAAAAAAAAAAAAAAAAAAAAAABYaW5nAAAADwAAAA8AAABOAA8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8P//////////////////////////////////////////////////////////////////8AAAAA//5ExAAAAAAAABAAAAAAAAAAAAAAHdAAABAAAAAAAAAAABYaW5nAAAADwAAAA8AAABOAA8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8P//////////////////////////////////////////////////////////////////8AAAAA//5ExAAAAAAAABAAAAAAAAAAAAAAHdAAABAAAAAAAAAAABYaW5nAAAADwAAAA8AAABOAA8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8P//////////////////////////////////////////////////////////////////8AAAAA//5ExAAAAAAAABAAAAAAAAAAAAAAHdAAABAAAAAAAAAAABYaW5nAAAADwAAAA8AAABOAA8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8P//////////////////////////////////////////////////////////////////8AAAAA");
+                this.silentAudio.loop = true;
+            }
+
+            init() {
+                // 1. CLEANUP
+                if (this.ctx) {
+                    try { this.ctx.close(); } catch(e) {}
+                }
+                this.oscillators = []; 
+
+                // 2. SETUP
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                this.ctx = new AudioContext();
+
+                // Master chain
+                this.masterGain = this.ctx.createGain();
+                this.masterGain.gain.value = 0;
+
+                // Analyser
+                this.analyser = this.ctx.createAnalyser();
+                this.analyser.fftSize = 4096;  // Higher resolution
+                this.analyser.smoothingTimeConstant = 0.1;  // Minimal blur
+                this.analyser.minDecibels = -100;
+                this.analyser.maxDecibels = -10;
+                // Use Float32Array for actual dB values
+                this.dataArray = new Float32Array(this.analyser.frequencyBinCount);
+
+                // Lowpass Filter
+                this.filter = this.ctx.createBiquadFilter();
+                this.filter.type = 'lowpass';
+                this.filter.Q.value = 0.5;
+                this.filter.frequency.value = 20000;
+
+                // Stereo Panner (for tilt left/right)
+                this.panner = this.ctx.createStereoPanner();
+                this.panner.pan.value = 0;
+
+                // LFO for vibrato (controlled by rotation rate)
+                this.lfo = this.ctx.createOscillator();
+                this.lfoGain = this.ctx.createGain();
+                this.lfo.type = 'sine';
+                this.lfo.frequency.value = 5; // 5 Hz vibrato
+                this.lfoGain.gain.value = 0;  // Start with no vibrato
+                this.lfo.connect(this.lfoGain);
+                this.lfo.start();
+
+                // Delay Effects
+                const delayL = this.ctx.createDelay();
+                const delayR = this.ctx.createDelay();
+                this.delayFeedback = this.ctx.createGain();
+
+                delayL.delayTime.value = 0.3;
+                delayR.delayTime.value = 0.4;
+                this.delayFeedback.gain.value = 0.3;
+
+                // Routing: filter -> panner -> masterGain -> analyser -> destination
+                this.filter.connect(this.panner);
+                this.panner.connect(this.masterGain);
+                this.masterGain.connect(this.analyser);
+                this.analyser.connect(this.ctx.destination);
+
+                // Delay routing
+                this.masterGain.connect(delayL);
+                this.masterGain.connect(delayR);
+
+                delayL.connect(this.delayFeedback);
+                delayR.connect(this.delayFeedback);
+                this.delayFeedback.connect(delayL);
+                this.delayFeedback.connect(delayR);
+
+                delayL.connect(this.analyser);
+                delayR.connect(this.analyser);
+
+                this.createOscillators();
+            }
+
+            createOscillators() {
+                const configs = [
+                    { type: 'sine', ratio: 1.0, detune: 0 },
+                    { type: 'sine', ratio: 2.0, detune: 2 },
+                    { type: 'sine', ratio: 3.0, detune: -2 },
+                    { type: 'sine', ratio: 5.0, detune: 4 }
+                ];
+
+                configs.forEach(conf => {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+
+                    osc.type = conf.type;
+                    osc.detune.value = conf.detune;
+
+                    // Connect LFO to oscillator frequency for vibrato
+                    this.lfoGain.connect(osc.frequency);
+
+                    osc.connect(gain);
+                    gain.connect(this.filter);
+                    gain.gain.value = 0;
+                    osc.start();
+
+                    this.oscillators.push({ osc, gain, ratio: conf.ratio });
+                });
+            }
+
+            resume() {
+                // Play silent HTML audio to force "Playback" category on iOS (Bypasses ringer switch)
+                this.silentAudio.play().catch(e => console.log("Silent audio failed:", e));
+
+                if (this.ctx && this.ctx.state === 'suspended') {
+                    this.ctx.resume();
+                }
+            }
+
+            start() {
+                if (!this.ctx) this.init();
+                if (this.ctx.state === 'suspended') this.ctx.resume();
+                
+                const now = this.ctx.currentTime;
+                // Use linearRamp instead of setTarget for more reliable mobile triggering
+                this.masterGain.gain.cancelScheduledValues(now);
+                this.masterGain.gain.setValueAtTime(this.masterGain.gain.value, now);
+                this.masterGain.gain.linearRampToValueAtTime(0.6, now + 0.1);
+                this.isPlaying = true;
+            }
+
+            stop() {
+                if (!this.ctx) return;
+                const now = this.ctx.currentTime;
+                this.masterGain.gain.cancelScheduledValues(now);
+                this.masterGain.gain.setValueAtTime(this.masterGain.gain.value, now);
+                this.masterGain.gain.linearRampToValueAtTime(0, now + 0.5);
+                this.isPlaying = false;
+            }
+
+            update(x, y) {
+                if (!this.ctx || this.oscillators.length === 0) return;
+                
+                const now = this.ctx.currentTime;
+
+                // Reverted to 65Hz for deep bass
+                const minFreq = 65; 
+                const maxFreq = 880;
+                const targetFreq = minFreq * Math.pow(maxFreq / minFreq, x);
+
+                this.oscillators.forEach(voice => {
+                    voice.osc.frequency.setTargetAtTime(targetFreq * voice.ratio, now, 0.02);
+                });
+
+                // FIX 2: Ensure at least some 2nd harmonic (octave) exists at y=0
+                // This helps "fake" the bass on small speakers.
+                const gain0 = 1.0 - (y * 0.2); 
+                
+                // Add base level of 0.15 to gain1 (octave) so it's never fully silent
+                let gain1 = 0.15 + (Math.max(0, (y - 0.1) * 2.5)); 
+                gain1 = Math.min(gain1, 0.6);
+                
+                let gain2 = Math.max(0, (y - 0.4) * 2.5); gain2 = Math.min(gain2, 0.5);
+                let gain3 = Math.max(0, (y - 0.7) * 3.3); gain3 = Math.min(gain3, 0.4);
+
+                if(this.oscillators[0]) this.oscillators[0].gain.gain.setTargetAtTime(gain0, now, 0.05);
+                if(this.oscillators[1]) this.oscillators[1].gain.gain.setTargetAtTime(gain1, now, 0.05);
+                if(this.oscillators[2]) this.oscillators[2].gain.gain.setTargetAtTime(gain2, now, 0.05);
+                if(this.oscillators[3]) this.oscillators[3].gain.gain.setTargetAtTime(gain3, now, 0.05);
+
+                const cutoff = targetFreq * (1 + (y * 10)); 
+                this.filter.frequency.setTargetAtTime(cutoff, now, 0.1);
+
+                document.getElementById('val-freq').innerText = Math.round(targetFreq);
+                let label = "Pure";
+                if (y > 0.15) label = "+Octave";
+                if (y > 0.45) label = "+Fifth";
+                if (y > 0.75) label = "Prismatic";
+                document.getElementById('val-harm').innerText = label;
+            }
+            
+            getAnalysis() {
+                if(this.analyser && this.dataArray) {
+                    // Use float data for actual dB values
+                    this.analyser.getFloatFrequencyData(this.dataArray);
+                    return this.dataArray;
+                }
+                return null;
+            }
+
+            updateOrientation(beta, gamma) {
+                if (!this.ctx || !this.isPlaying) return;
+                const now = this.ctx.currentTime;
+
+                // Gamma: left/right tilt (-90 to 90) -> pan (-1 to 1)
+                // Clamp to ±45 degrees for comfortable range
+                const clampedGamma = Math.max(-45, Math.min(45, gamma || 0));
+                const pan = clampedGamma / 45;
+                this.orientationParams.pan = pan;
+                this.panner.pan.setTargetAtTime(pan, now, 0.05);
+
+                // Beta: forward/back tilt (-180 to 180)
+                // Use 0-90 range (flat to tilted toward user)
+                const clampedBeta = Math.max(0, Math.min(90, beta || 0));
+                const filterMod = clampedBeta / 90;
+                this.orientationParams.filterMod = filterMod;
+
+                // Tilt controls BOTH filter cutoff and resonance for audible effect
+                // Tilting toward you = lower cutoff (darker/muffled) + more resonance
+                const baseCutoff = this.filter.frequency.value || 2000;
+                const tiltCutoff = 200 + ((1 - filterMod) * 4000); // 200-4200 Hz range
+                this.filter.frequency.setTargetAtTime(tiltCutoff, now, 0.1);
+
+                const targetQ = 0.5 + (filterMod * 12); // 0.5 to 12.5 - more extreme
+                this.filter.Q.setTargetAtTime(targetQ, now, 0.1);
+
+                // Update HUD
+                document.getElementById('val-tilt').innerText =
+                    `${Math.round(tiltCutoff)}Hz Q:${targetQ.toFixed(1)}`;
+            }
+
+            updateMotion(acceleration, rotationRate) {
+                if (!this.ctx || !this.isPlaying) return;
+                const now = this.ctx.currentTime;
+
+                // Rotation rate controls vibrato depth
+                if (rotationRate) {
+                    const rotMagnitude = Math.sqrt(
+                        (rotationRate.alpha || 0) ** 2 +
+                        (rotationRate.beta || 0) ** 2 +
+                        (rotationRate.gamma || 0) ** 2
+                    );
+
+                    // Map rotation to vibrato depth (0-100 deg/s -> 0-30 Hz variation)
+                    const vibratoDepth = Math.min(rotMagnitude / 100, 1) * 30;
+                    this.lfoGain.gain.setTargetAtTime(vibratoDepth, now, 0.03);
+                    this.orientationParams.lfoRate = vibratoDepth;
+
+                    // Also speed up LFO when rotating faster
+                    const lfoSpeed = 4 + Math.min(rotMagnitude / 50, 8); // 4-12 Hz
+                    this.lfo.frequency.setTargetAtTime(lfoSpeed, now, 0.05);
+                }
+
+                // Acceleration magnitude for shake detection
+                if (acceleration) {
+                    const accMagnitude = Math.sqrt(
+                        (acceleration.x || 0) ** 2 +
+                        (acceleration.y || 0) ** 2 +
+                        (acceleration.z || 0) ** 2
+                    );
+
+                    this.orientationParams.shake = accMagnitude;
+
+                    // Shake increases delay feedback temporarily
+                    if (accMagnitude > 12) {
+                        this.delayFeedback.gain.setTargetAtTime(0.7, now, 0.02);
+                        setTimeout(() => {
+                            if (this.ctx) {
+                                this.delayFeedback.gain.setTargetAtTime(0.3, this.ctx.currentTime, 0.5);
+                            }
+                        }, 300);
+                    }
+
+                    // Update HUD
+                    const motionLabel = accMagnitude > 12 ? 'SHAKE!' :
+                                       accMagnitude > 3 ? 'Active' : 'Steady';
+                    document.getElementById('val-motion').innerText = motionLabel;
+                }
+            }
+        }
+
+        /**
+         * VISUAL ENGINE
+         */
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let width, height;
+
+        let cursorX = 0;
+        let cursorY = 0;
+        let isTouching = false;
+        let ripples = [];
+        let animationFrameId;
+
+        // Spectrogram buffer (stores recent FFT frames)
+        const SPECTROGRAM_HISTORY = 120; // number of time frames to show
+        const MEL_BINS = 256; // number of mel frequency bins
+        let spectrogramBuffer = [];
+
+        // Mel scale conversion helpers
+        function hzToMel(hz) {
+            return 2595 * Math.log10(1 + hz / 700);
+        }
+
+        function melToHz(mel) {
+            return 700 * (Math.pow(10, mel / 2595) - 1);
+        }
+
+        // Create mel filterbank (maps FFT bins to mel bins)
+        function createMelFilterbank(fftSize, sampleRate, numMelBins, minFreq, maxFreq) {
+            const numFftBins = fftSize / 2;
+            const melMin = hzToMel(minFreq);
+            const melMax = hzToMel(maxFreq);
+            const melPoints = [];
+
+            // Create equally spaced mel points
+            for (let i = 0; i <= numMelBins + 1; i++) {
+                melPoints.push(melToHz(melMin + (melMax - melMin) * i / (numMelBins + 1)));
+            }
+
+            // Convert to FFT bin indices
+            const binPoints = melPoints.map(freq => Math.floor((fftSize + 1) * freq / sampleRate));
+
+            // Create triangular filters
+            const filterbank = [];
+            for (let i = 0; i < numMelBins; i++) {
+                const filter = new Float32Array(numFftBins);
+                const startBin = binPoints[i];
+                const centerBin = binPoints[i + 1];
+                const endBin = binPoints[i + 2];
+
+                for (let j = startBin; j < centerBin && j < numFftBins; j++) {
+                    filter[j] = (j - startBin) / (centerBin - startBin);
+                }
+                for (let j = centerBin; j < endBin && j < numFftBins; j++) {
+                    filter[j] = (endBin - j) / (endBin - centerBin);
+                }
+                filterbank.push(filter);
+            }
+            return filterbank;
+        }
+
+        let melFilterbank = null;
+
+        function initMelFilterbank() {
+            if (audio.ctx) {
+                melFilterbank = createMelFilterbank(
+                    audio.analyser.fftSize,
+                    audio.ctx.sampleRate,
+                    MEL_BINS,
+                    20,    // min frequency
+                    8000   // max frequency
+                );
+            }
+        }
+
+        function fftToMel(fftData) {
+            if (!melFilterbank) return null;
+            const melSpectrum = new Float32Array(MEL_BINS);
+
+            for (let i = 0; i < MEL_BINS; i++) {
+                // For dB values, we need to convert to linear, average, then back to dB
+                let linearSum = 0;
+                let filterSum = 0;
+                for (let j = 0; j < fftData.length; j++) {
+                    // fftData is already in dB, convert to linear power
+                    const linearPower = Math.pow(10, fftData[j] / 10);
+                    linearSum += linearPower * melFilterbank[i][j];
+                    filterSum += melFilterbank[i][j];
+                }
+                // Average and convert back to dB
+                if (filterSum > 0) {
+                    linearSum = linearSum / filterSum;
+                }
+                // Convert back to dB
+                melSpectrum[i] = 10 * Math.log10(linearSum + 1e-10);
+            }
+            return melSpectrum;
+        }
+
+        function resize() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        function drawGrid() {
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = 'rgba(0, 255, 204, 0.1)';
+            
+            // Draw grid
+            const stepX = width / 8;
+            for(let i=0; i<=width; i+=stepX) {
+                ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, height); ctx.stroke();
+            }
+            const stepY = height / 8;
+            for(let i=0; i<=height; i+=stepY) {
+                ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(width, i); ctx.stroke();
+            }
+        }
+
+        function drawSpectrogram() {
+            const data = audio.getAnalysis();
+            if (!data) return;
+
+            // Initialize mel filterbank if needed
+            if (!melFilterbank) {
+                initMelFilterbank();
+            }
+
+            // Convert FFT to mel spectrum
+            const melSpectrum = fftToMel(data);
+            if (!melSpectrum) return;
+
+            // Add to buffer
+            spectrogramBuffer.push(melSpectrum);
+            if (spectrogramBuffer.length > SPECTROGRAM_HISTORY) {
+                spectrogramBuffer.shift();
+            }
+
+            // Draw spectrogram (time on x-axis, frequency on y-axis)
+            const colWidth = Math.ceil(width / SPECTROGRAM_HISTORY);
+            const rowHeight = Math.ceil(height / MEL_BINS);
+
+            // Fixed normalization range for stability (dB scale)
+            // Matches analyser range: -100 to -10 dB
+            const minVal = -90;
+            const maxVal = -20;
+
+            // Draw each column (time frame)
+            for (let t = 0; t < spectrogramBuffer.length; t++) {
+                const frame = spectrogramBuffer[t];
+                const x = Math.floor(t * width / SPECTROGRAM_HISTORY);
+
+                for (let f = 0; f < MEL_BINS; f++) {
+                    // Normalize to 0-1 with fixed range
+                    let intensity = (frame[f] - minVal) / (maxVal - minVal);
+                    intensity = Math.max(0, Math.min(1, intensity));
+
+                    // Slight contrast boost
+                    intensity = Math.pow(intensity, 0.8);
+
+                    // Color mapping: black -> blue -> magenta -> red -> orange -> yellow -> white
+                    let r, g, b;
+                    if (intensity < 0.15) {
+                        // Black to dark blue
+                        const t = intensity / 0.15;
+                        r = 0;
+                        g = 0;
+                        b = Math.floor(80 * t);
+                    } else if (intensity < 0.3) {
+                        // Dark blue to blue
+                        const t = (intensity - 0.15) / 0.15;
+                        r = 0;
+                        g = Math.floor(30 * t);
+                        b = Math.floor(80 + 120 * t);
+                    } else if (intensity < 0.45) {
+                        // Blue to magenta
+                        const t = (intensity - 0.3) / 0.15;
+                        r = Math.floor(180 * t);
+                        g = Math.floor(30 * (1 - t));
+                        b = Math.floor(200 - 40 * t);
+                    } else if (intensity < 0.6) {
+                        // Magenta to red
+                        const t = (intensity - 0.45) / 0.15;
+                        r = Math.floor(180 + 75 * t);
+                        g = 0;
+                        b = Math.floor(160 - 160 * t);
+                    } else if (intensity < 0.75) {
+                        // Red to orange
+                        const t = (intensity - 0.6) / 0.15;
+                        r = 255;
+                        g = Math.floor(120 * t);
+                        b = 0;
+                    } else if (intensity < 0.9) {
+                        // Orange to yellow
+                        const t = (intensity - 0.75) / 0.15;
+                        r = 255;
+                        g = Math.floor(120 + 135 * t);
+                        b = 0;
+                    } else {
+                        // Yellow to white
+                        const t = (intensity - 0.9) / 0.1;
+                        r = 255;
+                        g = 255;
+                        b = Math.floor(255 * t);
+                    }
+
+                    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+
+                    // Draw from bottom (low freq) to top (high freq)
+                    const y = height - Math.floor((f + 1) * height / MEL_BINS);
+                    ctx.fillRect(x, y, colWidth, rowHeight);
+                }
+            }
+        }
+
+        function drawCursor() {
+            if (!isTouching) return;
+
+            const gradient = ctx.createRadialGradient(cursorX, cursorY, 5, cursorX, cursorY, 60);
+            gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+            gradient.addColorStop(0.2, 'rgba(0, 255, 204, 0.8)');
+            gradient.addColorStop(1, 'rgba(0, 255, 204, 0)');
+
+            ctx.fillStyle = gradient;
+            ctx.beginPath(); ctx.arc(cursorX, cursorY, 60, 0, Math.PI * 2); ctx.fill();
+
+            ctx.fillStyle = '#fff';
+            ctx.beginPath(); ctx.arc(cursorX, cursorY, 5, 0, Math.PI * 2); ctx.fill();
+        }
+
+        function addRipple(x, y) {
+            ripples.push({ x, y, r: 10, o: 1.0 });
+        }
+
+        function drawRipples() {
+            ctx.lineWidth = 2;
+            for(let i = ripples.length - 1; i >= 0; i--) {
+                let rip = ripples[i];
+                ctx.strokeStyle = `rgba(0, 255, 204, ${rip.o})`;
+                ctx.beginPath(); ctx.arc(rip.x, rip.y, rip.r, 0, Math.PI * 2); ctx.stroke();
+                rip.r += 2;
+                rip.o -= 0.02;
+                if(rip.o <= 0) ripples.splice(i, 1);
+            }
+        }
+
+        function animate() {
+            // Clear with solid background for spectrogram
+            ctx.fillStyle = 'rgb(5, 5, 10)';
+            ctx.fillRect(0, 0, width, height);
+
+            drawSpectrogram();
+            drawGrid();
+            drawRipples();
+            drawCursor();
+
+            if (!isTouching && Math.random() > 0.95) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+                ctx.beginPath();
+                ctx.arc(Math.random()*width, Math.random()*height, Math.random()*2, 0, Math.PI*2);
+                ctx.fill();
+            }
+
+            animationFrameId = requestAnimationFrame(animate);
+        }
+
+        /**
+         * INTERACTION
+         */
+        const audio = new AudioEngine();
+        const overlay = document.getElementById('overlay');
+        const startBtn = document.getElementById('startBtn');
+        let hasStarted = false;
+
+        function initApp(e) {
+            if(hasStarted) return;
+            hasStarted = true;
+
+            // Prevent phantom clicks if both events fire
+            if(e && e.type === 'touchstart') e.preventDefault();
+
+            // Request permissions FIRST, synchronously in user gesture
+            // Then handle results and init audio
+            const needsOrientationPermission = typeof DeviceOrientationEvent !== 'undefined' &&
+                typeof DeviceOrientationEvent.requestPermission === 'function';
+            const needsMotionPermission = typeof DeviceMotionEvent !== 'undefined' &&
+                typeof DeviceMotionEvent.requestPermission === 'function';
+
+            if (needsOrientationPermission || needsMotionPermission) {
+                // iOS 13+ path - request permissions synchronously in gesture handler
+                const promises = [];
+
+                if (needsOrientationPermission) {
+                    promises.push(
+                        DeviceOrientationEvent.requestPermission()
+                            .then(state => {
+                                if (state === 'granted') {
+                                    window.addEventListener('deviceorientation', handleOrientation, true);
+                                }
+                                return 'o:' + state;
+                            })
+                            .catch(err => 'o:' + (err.name || err.message || 'err').substring(0, 15))
+                    );
+                }
+
+                if (needsMotionPermission) {
+                    promises.push(
+                        DeviceMotionEvent.requestPermission()
+                            .then(state => {
+                                if (state === 'granted') {
+                                    window.addEventListener('devicemotion', handleMotion, true);
+                                }
+                                return 'm:' + state;
+                            })
+                            .catch(err => 'm:' + (err.name || err.message || 'err').substring(0, 15))
+                    );
+                }
+
+                Promise.all(promises).then(results => {
+                    document.getElementById('val-motion').innerText = results.join(' ');
+                });
+            } else {
+                // Non-iOS - just add listeners directly
+                if (typeof DeviceOrientationEvent !== 'undefined') {
+                    window.addEventListener('deviceorientation', handleOrientation, true);
+                }
+                if (typeof DeviceMotionEvent !== 'undefined') {
+                    window.addEventListener('devicemotion', handleMotion, true);
+                }
+                document.getElementById('val-motion').innerText = 'auto';
+            }
+
+            // Init audio (also needs user gesture)
+            audio.init();
+            audio.resume();
+
+            overlay.classList.add('hidden');
+            animate();
+        }
+
+        function handleOrientation(e) {
+            audio.updateOrientation(e.beta, e.gamma);
+        }
+
+        function handleMotion(e) {
+            // Use accelerationIncludingGravity as fallback (more widely available)
+            const acc = e.acceleration || e.accelerationIncludingGravity;
+            audio.updateMotion(acc, e.rotationRate);
+        }
+
+        // Use touchend for iOS (fires like a click, valid user gesture)
+        // Plus click for desktop fallback
+        startBtn.addEventListener('touchend', function(e) {
+            e.preventDefault();
+            initApp(e);
+        }, { passive: false });
+        startBtn.addEventListener('click', initApp);
+
+        function handleStart(x, y) {
+            isTouching = true;
+            cursorX = x;
+            cursorY = y;
+            const normX = x / width;
+            const normY = 1 - (y / height);
+            
+            if (audio.ctx) {
+                audio.start();
+                audio.update(normX, normY);
+            }
+            
+            addRipple(x, y);
+        }
+
+        function handleMove(x, y) {
+            if (!isTouching) return;
+            cursorX = x;
+            cursorY = y;
+            const normX = x / width;
+            const normY = 1 - (y / height);
+            audio.update(normX, normY);
+            if (Math.random() > 0.9) addRipple(x, y);
+        }
+
+        function handleEnd() {
+            isTouching = false;
+            audio.stop();
+        }
+
+        window.addEventListener('mousedown', e => handleStart(e.clientX, e.clientY));
+        window.addEventListener('mousemove', e => handleMove(e.clientX, e.clientY));
+        window.addEventListener('mouseup', handleEnd);
+
+        window.addEventListener('touchstart', e => {
+            e.preventDefault();
+            handleStart(e.touches[0].clientX, e.touches[0].clientY);
+        }, { passive: false });
+
+        window.addEventListener('touchmove', e => {
+            e.preventDefault();
+            handleMove(e.touches[0].clientX, e.touches[0].clientY);
+        }, { passive: false });
+
+        window.addEventListener('touchend', e => {
+            e.preventDefault();
+            handleEnd();
+        });
+
+    </script>
+</body>
+</html>
