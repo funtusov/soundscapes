@@ -160,20 +160,40 @@ export const SHAKE_ACCELERATION_THRESHOLD = 5;
 /** FM ratio rotation threshold */
 export const FM_ROTATION_THRESHOLD = 30;
 
+// ============ FILTER LFO CONSTANTS ============
+
+/** Filter LFO rate when centered (fast, subtle) */
+export const FILTER_LFO_RATE_CENTER = 8;
+
+/** Filter LFO rate when fully tilted (slow, dramatic) */
+export const FILTER_LFO_RATE_TILTED = 0.5;
+
+/** Filter LFO depth when centered (minimal) */
+export const FILTER_LFO_DEPTH_CENTER = 0;
+
+/** Filter LFO depth when fully tilted (Hz range of sweep) */
+export const FILTER_LFO_DEPTH_TILTED = 3000;
+
 // ============ REVERB CONSTANTS ============
 
 /** Reverb levels with wet/dry mix and decay time */
 export const REVERB_PRESETS = {
     off: { wet: 0, dry: 1, decay: 0 },
-    low: { wet: 0.3, dry: 0.85, decay: 1.2 },
-    mid: { wet: 0.5, dry: 0.75, decay: 1.8 },
-    high: { wet: 0.8, dry: 0.6, decay: 2.5 }
+    on: { wet: 0.8, dry: 0.6, decay: 2.5 }
 } as const;
 
 export type ReverbLevel = keyof typeof REVERB_PRESETS;
 
 /** Order for cycling through reverb levels */
-export const REVERB_CYCLE: ReverbLevel[] = ['off', 'low', 'mid', 'high'];
+export const REVERB_CYCLE: ReverbLevel[] = ['off', 'on'];
+
+/** Delay toggle presets */
+export const DELAY_PRESETS = {
+    off: { feedback: 0, mix: 0 },
+    on: { feedback: 0.4, mix: 0.3 }
+} as const;
+
+export type DelayLevel = keyof typeof DELAY_PRESETS;
 
 /** Sample rate for impulse response generation */
 export const REVERB_SAMPLE_RATE = 48000;
@@ -185,6 +205,39 @@ export const KARPLUS_BUFFER_POOL_SIZE = 8;
 
 /** Standard buffer sizes for pooling (covers common frequency ranges) */
 export const KARPLUS_BUFFER_SIZES = [128, 256, 512, 1024, 2048] as const;
+
+// ============ TOUCH PROFILE CONSTANTS ============
+
+/** Touch category thresholds */
+export const TOUCH_TAP_MAX_DURATION = 0.2;
+export const TOUCH_PRESS_MAX_DURATION = 1.0;
+
+/** Touch profiles for envelope shaping */
+export const TOUCH_PROFILES = {
+    tap: {
+        maxDuration: 0.2,
+        releaseTime: 0.05,
+        filterReleaseTime: 0.02,    // filter snaps shut quickly
+        reverbBoost: 0,              // stay dry
+        brightnessHold: true         // stays bright through release
+    },
+    press: {
+        maxDuration: 1.0,
+        releaseTime: 0.25,
+        filterReleaseTime: 0.15,
+        reverbBoost: 0.15,
+        brightnessHold: false
+    },
+    hold: {
+        maxDuration: Infinity,
+        releaseTime: 0.8,
+        filterReleaseTime: 0.4,      // filter closes slowly
+        reverbBoost: 0.3,            // more reverb tail
+        brightnessHold: false
+    }
+} as const;
+
+export type TouchCategory = keyof typeof TOUCH_PROFILES;
 
 // ============ LOOP RECORDER CONSTANTS ============
 

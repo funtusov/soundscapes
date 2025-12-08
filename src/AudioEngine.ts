@@ -15,15 +15,11 @@ import {
     DELAY_TIME_RIGHT,
     FILTER_MIN_FREQ,
     FILTER_MAX_FREQ,
-    FILTER_Q_MIN,
-    FILTER_Q_MAX,
     FILTER_Q_DEFAULT,
     FFT_SIZE,
     ANALYSER_SMOOTHING,
     ANALYSER_MIN_DB,
     ANALYSER_MAX_DB,
-    RELEASE_TIME_BASE,
-    RELEASE_TIME_MAX_ADDITION,
     VOICE_CLEANUP_BUFFER_MS,
     KARPLUS_MIN_PLUCK_INTERVAL,
     KARPLUS_REPLUCK_INTERVAL,
@@ -40,9 +36,13 @@ import {
     FM_ROTATION_THRESHOLD,
     REVERB_PRESETS,
     REVERB_CYCLE,
+    TOUCH_PROFILES,
+    TOUCH_TAP_MAX_DURATION,
+    TOUCH_PRESS_MAX_DURATION,
     clamp,
     type SynthesisMode,
-    type ReverbLevel
+    type ReverbLevel,
+    type TouchCategory
 } from './constants';
 
 // ============ TYPE DEFINITIONS ============
@@ -245,6 +245,10 @@ export class AudioEngine {
     reverbLevel: ReverbLevel = 'off';
     private impulseResponses: Map<ReverbLevel, AudioBuffer> = new Map();
 
+    // Touch envelope state
+    private currentFilterFreq: number = FILTER_MAX_FREQ;
+    private releaseFilterTarget: number = FILTER_MIN_FREQ;
+
     constructor() {
         // Silent audio for iOS unlock
         this.silentAudio = new Audio("data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYNAAAAAAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYNAAAAAAAAAAAAAAAAAAAA");
@@ -397,6 +401,76 @@ export class AudioEngine {
         // Buffer wasn't in pool (temporary), let GC handle it
     }
 
+    // ============ TOUCH CATEGORY DETECTION ============
+
+    private getTouchCategory(duration: number): TouchCategory {
+        if (duration < TOUCH_TAP_MAX_DURATION) return 'tap';
+        if (duration < TOUCH_PRESS_MAX_DURATION) return 'press';
+        return 'hold';
+    }
+
+    private applyReleaseEnvelope(duration: number): void {
+        if (!this.ctx || !this.filter || !this.reverbWetGain) return;
+
+        const category = this.getTouchCategory(duration);
+        const profile = TOUCH_PROFILES[category];
+        const now = this.ctx.currentTime;
+
+        // Apply filter release shaping
+        if (profile.brightnessHold) {
+            // Tap: keep filter bright, then snap shut
+            this.filter.frequency.setTargetAtTime(
+                this.currentFilterFreq,
+                now,
+                profile.filterReleaseTime
+            );
+            // Quick close after a brief delay
+            this.filter.frequency.setTargetAtTime(
+                this.releaseFilterTarget,
+                now + profile.releaseTime * 0.5,
+                profile.filterReleaseTime
+            );
+        } else {
+            // Press/Hold: gradually close filter
+            this.filter.frequency.setTargetAtTime(
+                this.releaseFilterTarget,
+                now,
+                profile.filterReleaseTime
+            );
+        }
+
+        // Apply reverb boost for longer touches
+        if (profile.reverbBoost > 0 && this.reverbLevel !== 'off') {
+            const currentWet = REVERB_PRESETS[this.reverbLevel].wet;
+            const boostedWet = Math.min(1, currentWet + profile.reverbBoost);
+
+            // Boost reverb during release for longer tail
+            this.reverbWetGain.gain.setTargetAtTime(boostedWet, now, 0.05);
+
+            // Return to normal after release
+            setTimeout(() => {
+                if (this.ctx && this.reverbWetGain && this.reverbLevel !== 'off') {
+                    this.reverbWetGain.gain.setTargetAtTime(
+                        REVERB_PRESETS[this.reverbLevel].wet,
+                        this.ctx.currentTime,
+                        0.3
+                    );
+                }
+            }, profile.releaseTime * 1000 + 200);
+        }
+
+        // Restore filter after release completes
+        setTimeout(() => {
+            if (this.ctx && this.filter && this.getVoiceCount() === 0) {
+                this.filter.frequency.setTargetAtTime(
+                    this.currentFilterFreq,
+                    this.ctx.currentTime,
+                    0.1
+                );
+            }
+        }, profile.releaseTime * 1000 + 300);
+    }
+
     // ============ CONVOLUTION REVERB ============
 
     private generateImpulseResponse(decayTime: number): AudioBuffer {
@@ -479,8 +553,8 @@ export class AudioEngine {
         this.reverbWetGain.gain.value = 0;
         this.reverbDryGain.gain.value = 1;
 
-        // Set default IR (high) so convolver is ready
-        const defaultIR = this.impulseResponses.get('high');
+        // Set default IR (on) so convolver is ready
+        const defaultIR = this.impulseResponses.get('on');
         if (defaultIR) {
             this.convolver.buffer = defaultIR;
         }
@@ -1481,7 +1555,13 @@ export class AudioEngine {
 
         if (this.mode === 'ambient') return;
 
-        const releaseTime = RELEASE_TIME_BASE + Math.min(RELEASE_TIME_MAX_ADDITION, duration * 0.3);
+        // Get touch category and profile for release shaping
+        const category = this.getTouchCategory(duration);
+        const profile = TOUCH_PROFILES[category];
+        const releaseTime = profile.releaseTime;
+
+        // Apply filter and reverb release shaping
+        this.applyReleaseEnvelope(duration);
 
         switch (this.mode) {
             case 'wavetable': this.stopWavetableVoice(touchId, releaseTime); break;
@@ -1528,26 +1608,27 @@ export class AudioEngine {
         return null;
     }
 
-    updateOrientation(beta: number | null, gamma: number | null): void {
+    updateOrientation(beta: number | null, _gamma: number | null): void {
         if (!this.ctx || !this.filter) return;
         const now = this.ctx.currentTime;
 
+        // Beta (forward/back tilt) controls filter cutoff
         const clampedBeta = clamp(beta || 0, 0, 90);
         const filterMod = clampedBeta / 90;
         this.orientationParams.filterMod = filterMod;
 
         const tiltCutoff = FILTER_MIN_FREQ * Math.pow(FILTER_MAX_FREQ / FILTER_MIN_FREQ, 1 - filterMod);
+        this.currentFilterFreq = tiltCutoff; // Track for release envelope
         this.filter.frequency.setTargetAtTime(tiltCutoff, now, 0.1);
 
-        const clampedGamma = clamp(gamma || 0, -45, 45);
-        const gammaNorm = Math.abs(clampedGamma) / 45;
-        this.orientationParams.pan = gammaNorm;
-
-        const targetQ = FILTER_Q_MIN + (gammaNorm * (FILTER_Q_MAX - FILTER_Q_MIN));
-        this.filter.Q.setTargetAtTime(targetQ, now, 0.1);
+        // Gamma (left/right tilt) - currently disabled, reserved for future use
+        // const clampedGamma = clamp(gamma || 0, -90, 90);
+        // const gammaNorm = Math.abs(clampedGamma) / 90;
 
         const tiltEl = document.getElementById('val-tilt');
-        if (tiltEl) tiltEl.innerText = `${Math.round(tiltCutoff)}Hz Q:${targetQ.toFixed(1)}`;
+        if (tiltEl) {
+            tiltEl.innerText = `${Math.round(tiltCutoff)}Hz`;
+        }
     }
 
     updateMotion(acceleration: DeviceMotionEventAcceleration | null, rotationRate: DeviceMotionEventRotationRate | null): void {

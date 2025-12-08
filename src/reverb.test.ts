@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { REVERB_PRESETS, REVERB_CYCLE } from './constants';
 
 describe('Reverb Constants', () => {
-    it('has off and high presets', () => {
+    it('has off and on presets', () => {
         expect(REVERB_PRESETS.off).toBeDefined();
-        expect(REVERB_PRESETS.high).toBeDefined();
+        expect(REVERB_PRESETS.on).toBeDefined();
     });
 
     it('off preset has zero wet', () => {
@@ -12,14 +12,14 @@ describe('Reverb Constants', () => {
         expect(REVERB_PRESETS.off.dry).toBe(1);
     });
 
-    it('high preset has significant wet mix', () => {
-        expect(REVERB_PRESETS.high.wet).toBeGreaterThan(0.5);
-        expect(REVERB_PRESETS.high.decay).toBeGreaterThan(1);
+    it('on preset has significant wet mix', () => {
+        expect(REVERB_PRESETS.on.wet).toBeGreaterThan(0.5);
+        expect(REVERB_PRESETS.on.decay).toBeGreaterThan(1);
     });
 
-    it('cycle includes off and high', () => {
+    it('cycle includes off and on', () => {
         expect(REVERB_CYCLE).toContain('off');
-        expect(REVERB_CYCLE).toContain('high');
+        expect(REVERB_CYCLE).toContain('on');
     });
 });
 
@@ -98,8 +98,8 @@ describe('Wet/Dry Mix Math', () => {
         expect(totalOutput).toBe(1);
     });
 
-    it('high mode mixes wet and dry', () => {
-        const { wet, dry } = REVERB_PRESETS.high;
+    it('on mode mixes wet and dry', () => {
+        const { wet, dry } = REVERB_PRESETS.on;
 
         // Simulate a signal of amplitude 1
         const inputSignal = 1;
