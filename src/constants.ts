@@ -165,13 +165,15 @@ export const FM_ROTATION_THRESHOLD = 30;
 /** Reverb levels with wet/dry mix and decay time */
 export const REVERB_PRESETS = {
     off: { wet: 0, dry: 1, decay: 0 },
-    high: { wet: 0.8, dry: 0.6, decay: 3.0 }
+    low: { wet: 0.3, dry: 0.85, decay: 1.2 },
+    mid: { wet: 0.5, dry: 0.75, decay: 1.8 },
+    high: { wet: 0.8, dry: 0.6, decay: 2.5 }
 } as const;
 
 export type ReverbLevel = keyof typeof REVERB_PRESETS;
 
 /** Order for cycling through reverb levels */
-export const REVERB_CYCLE: ReverbLevel[] = ['off', 'high'];
+export const REVERB_CYCLE: ReverbLevel[] = ['off', 'low', 'mid', 'high'];
 
 /** Sample rate for impulse response generation */
 export const REVERB_SAMPLE_RATE = 48000;

@@ -408,17 +408,47 @@ export class AudioEngine {
 
         for (let channel = 0; channel < 2; channel++) {
             const data = buffer.getChannelData(channel);
-            for (let i = 0; i < length; i++) {
-                // Exponential decay with noise
-                const decay = Math.exp(-3 * i / length);
-                // Stereo decorrelation with slightly different noise per channel
-                const noise = (Math.random() * 2 - 1) * (channel === 0 ? 1 : 0.95);
-                data[i] = noise * decay;
 
-                // Add some early reflections for more natural sound
-                if (i < sampleRate * 0.05) {
-                    const earlyDecay = Math.exp(-10 * i / (sampleRate * 0.05));
-                    data[i] += (Math.random() * 2 - 1) * earlyDecay * 0.5;
+            // Generate filtered noise (lowpass to make it more coherent)
+            let prevSample = 0;
+            const filterCoeff = 0.85; // Higher = more filtering = smoother
+
+            for (let i = 0; i < length; i++) {
+                // Exponential decay envelope
+                const decay = Math.exp(-3 * i / length);
+
+                // Generate lowpass-filtered noise for more coherent reverb
+                const noise = Math.random() * 2 - 1;
+                const filtered = prevSample * filterCoeff + noise * (1 - filterCoeff);
+                prevSample = filtered;
+
+                // Stereo decorrelation
+                const stereoOffset = channel === 0 ? 1.0 : 0.93;
+                data[i] = filtered * decay * stereoOffset;
+
+                // Strong early reflections (first 100ms)
+                if (i < sampleRate * 0.1) {
+                    // Add discrete early reflections
+                    const reflectionTimes = [0.01, 0.023, 0.037, 0.052, 0.071, 0.089];
+                    for (const rt of reflectionTimes) {
+                        const reflectionSample = Math.floor(rt * sampleRate);
+                        if (i === reflectionSample) {
+                            const reflectionGain = 0.7 * Math.exp(-rt * 10);
+                            data[i] += (channel === 0 ? 1 : -1) * reflectionGain;
+                        }
+                    }
+                }
+            }
+
+            // Normalize
+            let maxVal = 0;
+            for (let i = 0; i < length; i++) {
+                maxVal = Math.max(maxVal, Math.abs(data[i]));
+            }
+            if (maxVal > 0) {
+                const normalize = 1.0 / maxVal;
+                for (let i = 0; i < length; i++) {
+                    data[i] *= normalize;
                 }
             }
         }
