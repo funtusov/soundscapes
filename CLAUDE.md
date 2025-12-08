@@ -4,36 +4,59 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-EtherPad Soundscape is a single-file interactive audio-visual web application. Users touch/click and drag on a canvas to generate synthesized tones with visual feedback.
+EtherPad Soundscape is an interactive audio-visual web application/instrument. Users touch/click and drag on a canvas to generate synthesized tones with visual feedback. Multiple synthesis modes and scale quantization provide a rich musical experience.
 
 ## Development
 
-This is a standalone HTML file with no build process. To run:
-- Open `index.html` directly in a browser, or
+No build process required. To run:
 - Serve with any static file server (e.g., `python -m http.server`)
+- Or deploy to Netlify: `netlify deploy --prod`
+
+Live site: https://etherpad-soundscape.netlify.app
+
+## File Structure
+
+```
+/
+├── index.html          # Main HTML shell
+├── css/
+│   └── styles.css      # All CSS styles
+├── js/
+│   ├── main.js         # Entry point, app initialization
+│   ├── AudioEngine.js  # Web Audio synthesizer (7 modes)
+│   ├── visualizer.js   # Canvas/mel spectrogram rendering
+│   └── controls.js     # Touch/mouse/orientation handlers
+├── CLAUDE.md           # This file
+└── .gitignore
+```
 
 ## Architecture
 
-The entire application lives in `index.html` with three main components:
+### AudioEngine (js/AudioEngine.js)
+Multi-mode Web Audio synthesizer with:
+- **7 synthesis modes**: Wavetable, Theremin, FM, Chords, Karplus-Strong, Granular, Ambient
+- **Multitouch polyphony**: Each finger creates an independent voice
+- **Scale quantization**: Major, Minor, Pentatonic, Chromatic scales with selectable tonic
+- **Touch duration**: Affects envelope and sound evolution
+- **Device orientation**: Beta controls filter cutoff, Gamma controls Q
+- **Shake detection**: Triggers delay feedback burst
 
-1. **AudioEngine class** - Web Audio API synthesizer with:
-   - 4 oscillators with harmonic ratios (1x, 2x, 3x, 5x fundamental)
-   - Lowpass filter and stereo delay effects
-   - FFT analyser for visualization
-   - iOS audio unlock workaround using silent audio element
+### Visualizer (js/visualizer.js)
+- Real-time mel spectrogram (256 bins)
+- Colorful intensity gradient (black→blue→magenta→red→orange→yellow→white)
+- Grid overlay and cursor glow effects
+- Ripple animations on interaction
 
-2. **Visual Engine** - Canvas-based rendering:
-   - Real-time FFT spectrum visualization
-   - Grid overlay and cursor glow effects
-   - Ripple animations on interaction
-
-3. **Interaction Layer** - Input handling:
-   - X-axis controls pitch (65Hz-880Hz exponential)
-   - Y-axis controls harmonic content and filter cutoff
-   - Supports both mouse and touch input
+### Controls (js/controls.js)
+- Multi-touch support with touch duration tracking
+- Mouse fallback for desktop
+- iOS DeviceOrientation/DeviceMotion permission handling
+- Mode selector and scale control initialization
 
 ## Key Technical Details
 
-- Uses Tailwind CSS via CDN for overlay styling
-- Mobile-optimized with `touch-action: none` and passive event listeners
-- Bypasses iOS mute switch using silent audio element trick
+- Uses ES6 modules (`type="module"`)
+- Tailwind CSS via CDN for overlay styling
+- Mobile-optimized with `touch-action: none`
+- iOS audio unlock via silent audio element
+- Lowpass filter: 80Hz-8000Hz (beta tilt), Q: 0.5-15 (gamma tilt)
