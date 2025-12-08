@@ -124,6 +124,10 @@ export class AudioEngine {
             clearInterval(this.ambientInterval);
             this.ambientInterval = null;
         }
+        if (this.ambientTouchTimeout) {
+            clearTimeout(this.ambientTouchTimeout);
+            this.ambientTouchTimeout = null;
+        }
 
         if (this.nodes.oscillators) {
             this.nodes.oscillators.forEach(o => {
@@ -150,6 +154,37 @@ export class AudioEngine {
                 } catch(e) {}
             });
         }
+        // Cleanup ambient mode v2 nodes
+        if (this.nodes.drones) {
+            this.nodes.drones.forEach(drone => {
+                try {
+                    drone.oscs.forEach(o => { o.osc.stop(); o.osc.disconnect(); o.gain.disconnect(); });
+                    drone.voiceGain.disconnect();
+                    drone.panner.disconnect();
+                } catch(e) {}
+            });
+        }
+        if (this.nodes.noiseBed) {
+            try {
+                this.nodes.noiseBed.source.stop();
+                this.nodes.noiseBed.source.disconnect();
+                this.nodes.noiseBed.bandpass.disconnect();
+                this.nodes.noiseBed.lowpass.disconnect();
+                this.nodes.noiseBed.gain.disconnect();
+                this.nodes.noiseBed.panner.disconnect();
+            } catch(e) {}
+        }
+        if (this.nodes.shimmer) {
+            try {
+                this.nodes.shimmer.partials.forEach(p => {
+                    p.osc.stop(); p.osc.disconnect();
+                    p.gain.disconnect();
+                    p.tremolo.stop(); p.tremolo.disconnect();
+                    p.tremoloGain.disconnect();
+                });
+                this.nodes.shimmer.masterGain.disconnect();
+            } catch(e) {}
+        }
         if (this.nodes.noiseSource) {
             try { this.nodes.noiseSource.stop(); this.nodes.noiseSource.disconnect(); } catch(e) {}
         }
@@ -161,6 +196,12 @@ export class AudioEngine {
         }
         if (this.nodes.lfo2) {
             try { this.nodes.lfo2.stop(); this.nodes.lfo2.disconnect(); } catch(e) {}
+        }
+        if (this.nodes.lfoSlow) {
+            try { this.nodes.lfoSlow.stop(); this.nodes.lfoSlow.disconnect(); } catch(e) {}
+        }
+        if (this.nodes.lfoMedium) {
+            try { this.nodes.lfoMedium.stop(); this.nodes.lfoMedium.disconnect(); } catch(e) {}
         }
         this.nodes = {};
     }
@@ -548,127 +589,383 @@ export class AudioEngine {
         }
     }
 
-    // ========== AMBIENT MODE ==========
-    initAmbient() {
-        this.ambientState = { x: 0.5, y: 0.5, targetX: 0.5, targetY: 0.5, driftPhase: 0, isActive: false };
+    // ========== AMBIENT MODE v2 ==========
+    // Reimagined with: detuned drone clusters, resonant noise bed,
+    // multi-rate modulation, and spatial design
 
-        const layers = [];
+    initAmbient() {
+        this.ambientState = {
+            x: 0.5,
+            y: 0.5,
+            targetX: 0.5,
+            targetY: 0.5,
+            // Multi-rate phases for organic movement
+            microPhase: Math.random() * Math.PI * 2,
+            mesoPhase: Math.random() * Math.PI * 2,
+            macroPhase: Math.random() * Math.PI * 2,
+            // Random walk state
+            walkX: 0.5,
+            walkY: 0.5,
+            walkVelX: 0,
+            walkVelY: 0,
+            isActive: false,
+            touchActive: false
+        };
+
+        // Create drone voices with detuned oscillator clusters
+        const drones = [];
+        const droneCount = 4;
         const baseFreq = 110;
 
-        const sub = this.ctx.createOscillator();
-        const subGain = this.ctx.createGain();
-        sub.type = 'sine';
-        sub.frequency.value = baseFreq / 2;
-        subGain.gain.value = 0;
-        sub.connect(subGain);
-        subGain.connect(this.filter);
-        sub.start();
-        layers.push({ osc: sub, gain: subGain, ratio: 0.5, type: 'sub' });
+        // Scale degrees for drone voicing (root, 5th, octave, 5th+octave)
+        const voiceRatios = [1, 1.5, 2, 3];
+        const panPositions = [-0.6, -0.2, 0.2, 0.6];
 
-        for (let i = 0; i < 2; i++) {
-            const osc = this.ctx.createOscillator();
-            const gain = this.ctx.createGain();
-            osc.type = 'triangle';
-            osc.frequency.value = baseFreq * (i === 0 ? 1 : 1.5);
-            gain.gain.value = 0;
-            osc.connect(gain);
-            gain.connect(this.filter);
-            osc.start();
-            layers.push({ osc, gain, ratio: i === 0 ? 1 : 1.5, type: 'main' });
+        for (let v = 0; v < droneCount; v++) {
+            const drone = this.createDroneVoice(baseFreq * voiceRatios[v], panPositions[v]);
+            drones.push(drone);
         }
 
-        for (let i = 0; i < 2; i++) {
-            const osc = this.ctx.createOscillator();
-            const gain = this.ctx.createGain();
-            osc.type = 'sine';
-            osc.frequency.value = baseFreq * (i === 0 ? 2 : 3);
-            gain.gain.value = 0;
-            osc.connect(gain);
-            gain.connect(this.filter);
-            osc.start();
-            layers.push({ osc, gain, ratio: i === 0 ? 2 : 3, type: 'shimmer' });
-        }
+        // Create resonant noise bed
+        const noiseBed = this.createNoiseBed();
 
-        const lfo1 = this.ctx.createOscillator();
-        const lfo1Gain = this.ctx.createGain();
-        lfo1.frequency.value = 0.05;
-        lfo1Gain.gain.value = 3;
-        lfo1.connect(lfo1Gain);
-        lfo1.start();
+        // Create shimmer layer (high harmonics with fast modulation)
+        const shimmer = this.createShimmerLayer(baseFreq);
 
-        const lfo2 = this.ctx.createOscillator();
-        const lfo2Gain = this.ctx.createGain();
-        lfo2.frequency.value = 0.08;
-        lfo2Gain.gain.value = 5;
-        lfo2.connect(lfo2Gain);
-        lfo2.start();
+        // Multi-rate LFO system
+        const lfoSlow = this.ctx.createOscillator();
+        lfoSlow.type = 'sine';
+        lfoSlow.frequency.value = 0.03; // ~33 second cycle
+        lfoSlow.start();
 
-        layers.forEach((l, i) => {
-            if (i % 2 === 0) lfo1Gain.connect(l.osc.frequency);
-            else lfo2Gain.connect(l.osc.frequency);
-        });
+        const lfoMedium = this.ctx.createOscillator();
+        lfoMedium.type = 'sine';
+        lfoMedium.frequency.value = 0.12; // ~8 second cycle
+        lfoMedium.start();
 
-        this.nodes = { layers, lfo1, lfo1Gain, lfo2, lfo2Gain };
+        this.nodes = {
+            drones,
+            noiseBed,
+            shimmer,
+            lfoSlow,
+            lfoMedium,
+            baseFreq
+        };
+
         this.startAmbientLoop();
+    }
+
+    createDroneVoice(freq, panPosition) {
+        // Each drone = 3 detuned sine oscillators for gentle beating
+        const oscs = [];
+        const detuneAmounts = [-3, 0, 3]; // Very subtle detune in cents
+
+        const voiceGain = this.ctx.createGain();
+        voiceGain.gain.value = 0;
+
+        const panner = this.ctx.createStereoPanner();
+        panner.pan.value = panPosition;
+
+        voiceGain.connect(panner);
+        panner.connect(this.filter);
+
+        for (let i = 0; i < 3; i++) {
+            const osc = this.ctx.createOscillator();
+            const oscGain = this.ctx.createGain();
+
+            osc.type = 'sine'; // Pure sine for mellow sound
+            osc.frequency.value = freq;
+            osc.detune.value = detuneAmounts[i];
+            oscGain.gain.value = 0.25; // Even, gentle levels
+
+            osc.connect(oscGain);
+            oscGain.connect(voiceGain);
+            osc.start();
+
+            oscs.push({ osc, gain: oscGain, baseDetune: detuneAmounts[i] });
+        }
+
+        return {
+            oscs,
+            voiceGain,
+            panner,
+            baseFreq: freq,
+            panBase: panPosition,
+            // Per-voice drift state
+            detunePhase: Math.random() * Math.PI * 2,
+            panPhase: Math.random() * Math.PI * 2
+        };
+    }
+
+    createNoiseBed() {
+        // Filtered noise for subtle texture (like distant wind or ocean)
+        const bufferSize = this.ctx.sampleRate * 2;
+        const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const data = noiseBuffer.getChannelData(0);
+
+        // Very soft pink noise
+        let b0 = 0, b1 = 0, b2 = 0;
+        for (let i = 0; i < bufferSize; i++) {
+            const white = Math.random() * 2 - 1;
+            b0 = 0.99765 * b0 + white * 0.0990460;
+            b1 = 0.96300 * b1 + white * 0.2965164;
+            b2 = 0.57000 * b2 + white * 1.0526913;
+            data[i] = (b0 + b1 + b2) * 0.08; // Quieter base noise
+        }
+
+        const noiseSource = this.ctx.createBufferSource();
+        noiseSource.buffer = noiseBuffer;
+        noiseSource.loop = true;
+
+        // Gentle bandpass - low Q for smooth, non-resonant character
+        const bandpass = this.ctx.createBiquadFilter();
+        bandpass.type = 'bandpass';
+        bandpass.frequency.value = 300;
+        bandpass.Q.value = 0.5; // Very low Q = smooth, not resonant
+
+        // Lowpass to remove harshness
+        const lowpass = this.ctx.createBiquadFilter();
+        lowpass.type = 'lowpass';
+        lowpass.frequency.value = 800; // Cut highs for warmth
+
+        const noiseGain = this.ctx.createGain();
+        noiseGain.gain.value = 0;
+
+        const noisePanner = this.ctx.createStereoPanner();
+        noisePanner.pan.value = 0;
+
+        noiseSource.connect(bandpass);
+        bandpass.connect(lowpass);
+        lowpass.connect(noiseGain);
+        noiseGain.connect(noisePanner);
+        noisePanner.connect(this.filter);
+        noiseSource.start();
+
+        return {
+            source: noiseSource,
+            bandpass,
+            lowpass,
+            gain: noiseGain,
+            panner: noisePanner,
+            filterPhase: Math.random() * Math.PI * 2
+        };
+    }
+
+    createShimmerLayer(baseFreq) {
+        // Gentle high partials for subtle sparkle (not aggressive shimmer)
+        const partials = [];
+        const partialRatios = [3, 4, 5]; // Fewer, lower partials
+
+        const shimmerGain = this.ctx.createGain();
+        shimmerGain.gain.value = 0;
+        shimmerGain.connect(this.filter);
+
+        for (let i = 0; i < partialRatios.length; i++) {
+            const osc = this.ctx.createOscillator();
+            const oscGain = this.ctx.createGain();
+            const tremolo = this.ctx.createOscillator();
+            const tremoloGain = this.ctx.createGain();
+
+            osc.type = 'sine';
+            osc.frequency.value = baseFreq * partialRatios[i];
+            oscGain.gain.value = 0.015 / (i + 1); // Much quieter
+
+            // Slow, gentle tremolo (more like slow breathing than shimmer)
+            tremolo.type = 'sine';
+            tremolo.frequency.value = 0.3 + Math.random() * 0.5; // 0.3-0.8 Hz (very slow)
+            tremoloGain.gain.value = oscGain.gain.value * 0.3;
+
+            tremolo.connect(tremoloGain);
+            tremoloGain.connect(oscGain.gain);
+
+            osc.connect(oscGain);
+            oscGain.connect(shimmerGain);
+
+            osc.start();
+            tremolo.start();
+
+            partials.push({
+                osc,
+                gain: oscGain,
+                tremolo,
+                tremoloGain,
+                ratio: partialRatios[i]
+            });
+        }
+
+        return { partials, masterGain: shimmerGain };
     }
 
     startAmbientLoop() {
         if (this.ambientInterval) clearInterval(this.ambientInterval);
 
         const now = this.ctx.currentTime;
-        this.masterGain.gain.setTargetAtTime(0.5, now, 0.5);
-        this.nodes.layers.forEach(l => {
-            const level = l.type === 'sub' ? 0.15 : l.type === 'main' ? 0.12 : 0.05;
-            l.gain.gain.setTargetAtTime(level, now, 0.5);
+
+        // Fade in master (gentle level)
+        this.masterGain.gain.setTargetAtTime(0.5, now, 1.5);
+
+        // Fade in drone voices (very gentle levels)
+        this.nodes.drones.forEach((drone, i) => {
+            const level = i === 0 ? 0.10 : 0.06; // Much quieter
+            drone.voiceGain.gain.setTargetAtTime(level, now + i * 0.5, 1.2);
         });
+
+        // Fade in noise bed very subtly (barely perceptible)
+        this.nodes.noiseBed.gain.gain.setTargetAtTime(0.025, now + 1.0, 2.0);
+
+        // Fade in shimmer (very quiet)
+        this.nodes.shimmer.masterGain.gain.setTargetAtTime(0.04, now + 1.5, 2.0);
+
         this.ambientState.isActive = true;
         this.isPlaying = true;
 
+        // Main evolution loop - runs at 60fps equivalent
         this.ambientInterval = setInterval(() => {
             if (this.mode !== 'ambient' || !this.ctx) {
                 clearInterval(this.ambientInterval);
                 return;
             }
             this.evolveAmbient();
-        }, 50);
+        }, 16);
     }
 
     evolveAmbient() {
         const now = this.ctx.currentTime;
         const state = this.ambientState;
+        const dt = 0.016; // ~60fps
 
-        state.driftPhase += 0.01;
-        const drift = Math.sin(state.driftPhase) * 0.002;
-        const smoothing = 0.02;
-        state.x += (state.targetX - state.x) * smoothing + drift;
-        state.y += (state.targetY - state.y) * smoothing + Math.cos(state.driftPhase * 0.7) * 0.001;
-        state.x = Math.max(0, Math.min(1, state.x));
-        state.y = Math.max(0, Math.min(1, state.y));
+        // === MULTI-RATE PHASE UPDATES (slower for focus music) ===
+        state.microPhase += dt * 0.8;   // Gentle movement
+        state.mesoPhase += dt * 0.08;   // Slow breathing (~12 sec cycle)
+        state.macroPhase += dt * 0.008; // Very slow drift (~13 min cycle)
 
-        const baseFreq = 55 + state.x * 110;
+        // === RANDOM WALK (very gentle Brownian motion) ===
+        state.walkVelX += (Math.random() - 0.5) * 0.0008;
+        state.walkVelY += (Math.random() - 0.5) * 0.0008;
+        state.walkVelX *= 0.98; // Damping
+        state.walkVelY *= 0.98;
+        state.walkX += state.walkVelX;
+        state.walkY += state.walkVelY;
+        // Soft boundaries
+        if (state.walkX < 0.1) state.walkVelX += 0.001;
+        if (state.walkX > 0.9) state.walkVelX -= 0.001;
+        if (state.walkY < 0.1) state.walkVelY += 0.001;
+        if (state.walkY > 0.9) state.walkVelY -= 0.001;
+        state.walkX = Math.max(0, Math.min(1, state.walkX));
+        state.walkY = Math.max(0, Math.min(1, state.walkY));
 
-        this.nodes.layers.forEach((l) => {
-            const freq = baseFreq * l.ratio;
-            l.osc.frequency.setTargetAtTime(freq, now, 0.3);
+        // === BLEND INFLUENCES ===
+        // Combine random walk, sinusoidal drift, and touch target
+        const macroInfluence = 0.3;
+        const walkInfluence = 0.4;
+        const touchInfluence = state.touchActive ? 0.5 : 0.1;
 
-            let level;
-            if (l.type === 'sub') level = 0.15 * (1 - state.y * 0.3);
-            else if (l.type === 'main') level = 0.12;
-            else level = 0.03 + state.y * 0.08;
-            l.gain.gain.setTargetAtTime(level, now, 0.2);
+        const macroDriftX = 0.5 + Math.sin(state.macroPhase) * 0.3;
+        const macroDriftY = 0.5 + Math.cos(state.macroPhase * 0.7) * 0.3;
+
+        const blendedX = macroDriftX * macroInfluence +
+                         state.walkX * walkInfluence +
+                         state.targetX * touchInfluence;
+        const blendedY = macroDriftY * macroInfluence +
+                         state.walkY * walkInfluence +
+                         state.targetY * touchInfluence;
+
+        // Smooth interpolation
+        state.x += (blendedX - state.x) * 0.02;
+        state.y += (blendedY - state.y) * 0.02;
+
+        // === UPDATE DRONE VOICES ===
+        const baseFreq = 55 + state.x * 110; // 55-165 Hz range
+
+        this.nodes.drones.forEach((drone, i) => {
+            // Per-drone phase for independent movement
+            drone.detunePhase += dt * (0.1 + i * 0.03);
+            drone.panPhase += dt * (0.05 + i * 0.02);
+
+            // Frequency with gentle meso-rate breathing
+            const mesoMod = Math.sin(state.mesoPhase + i * 0.5) * 1; // Subtle pitch drift
+            const freqRatio = drone.baseFreq / this.nodes.baseFreq;
+            const newFreq = baseFreq * freqRatio;
+
+            drone.oscs.forEach((o, j) => {
+                o.osc.frequency.setTargetAtTime(newFreq, now, 0.5);
+
+                // Very gentle detune variation
+                const detuneWander = Math.sin(drone.detunePhase + j * 2) * 1.5;
+                const targetDetune = o.baseDetune + detuneWander + mesoMod;
+                o.osc.detune.setTargetAtTime(targetDetune, now, 0.4);
+            });
+
+            // Very subtle pan movement
+            const panWander = Math.sin(drone.panPhase) * 0.08;
+            const newPan = Math.max(-1, Math.min(1, drone.panBase + panWander));
+            drone.panner.pan.setTargetAtTime(newPan, now, 0.5);
+
+            // Gentle level modulation (subtle breathing)
+            const breatheMod = 0.92 + Math.sin(state.mesoPhase + i * 0.7) * 0.08;
+            const baseLevel = i === 0 ? 0.10 : 0.06; // Much quieter
+            const yMod = i > 1 ? (1 - state.y * 0.2) : 1;
+            drone.voiceGain.gain.setTargetAtTime(baseLevel * breatheMod * yMod, now, 0.3);
         });
 
-        this.nodes.lfo1.frequency.setTargetAtTime(0.03 + state.y * 0.05, now, 0.5);
-        this.nodes.lfo2.frequency.setTargetAtTime(0.05 + state.y * 0.08, now, 0.5);
+        // === UPDATE NOISE BED (very subtle, like distant air) ===
+        const noise = this.nodes.noiseBed;
+        noise.filterPhase += dt * 0.03; // Very slow sweep
 
-        document.getElementById('val-freq').innerText = Math.round(baseFreq) + 'Hz';
-        document.getElementById('val-harm').innerText = 'drift ' + (state.x * 100).toFixed(0) + '%';
+        // Gentle bandpass sweep in low-mid range
+        const noiseCenter = 200 + state.y * 200 + Math.sin(noise.filterPhase) * 50;
+        noise.bandpass.frequency.setTargetAtTime(noiseCenter, now, 0.8);
+        noise.bandpass.Q.setTargetAtTime(0.5 + state.y * 0.5, now, 0.5); // Keep Q low
+
+        // Very subtle noise level
+        const noiseLevel = 0.015 + state.y * 0.025;
+        noise.gain.gain.setTargetAtTime(noiseLevel, now, 0.4);
+
+        // Very subtle noise panning
+        const noisePan = Math.sin(noise.filterPhase * 0.2) * 0.2;
+        noise.panner.pan.setTargetAtTime(noisePan, now, 0.5);
+
+        // === UPDATE SHIMMER (very gentle high partials) ===
+        const shimmer = this.nodes.shimmer;
+        shimmer.partials.forEach((p, i) => {
+            const shimmerFreq = baseFreq * p.ratio;
+            p.osc.frequency.setTargetAtTime(shimmerFreq, now, 0.5);
+
+            // Very subtle shimmer intensity
+            const shimmerLevel = (0.008 + state.y * 0.015) / (i + 1);
+            p.gain.gain.setTargetAtTime(shimmerLevel, now, 0.5);
+
+            // Slow tremolo variation
+            const tremoloRate = 0.3 + Math.sin(state.mesoPhase + i) * 0.2;
+            p.tremolo.frequency.setTargetAtTime(tremoloRate, now, 0.8);
+        });
+
+        // Overall shimmer level (very quiet)
+        const shimmerMaster = 0.02 + state.y * 0.04;
+        shimmer.masterGain.gain.setTargetAtTime(shimmerMaster, now, 0.5);
+
+        // === UPDATE HUD ===
+        const noteName = this.getNoteName(Math.round(12 * Math.log2(baseFreq / 55)) + 9);
+        document.getElementById('val-freq').innerText = noteName + ' ' + Math.round(baseFreq) + 'Hz';
+
+        const moodWord = state.y < 0.33 ? 'deep' : state.y < 0.66 ? 'calm' : 'airy';
+        document.getElementById('val-harm').innerText = moodWord + ' ' + (state.touchActive ? '◉' : '○');
     }
 
     updateAmbient(x, y, duration = 0) {
-        const influence = Math.min(1, 0.3 + duration * 0.3);
-        this.ambientState.targetX = this.ambientState.targetX * (1 - influence) + x * influence;
-        this.ambientState.targetY = this.ambientState.targetY * (1 - influence) + y * influence;
+        const state = this.ambientState;
+
+        // Touch influence increases with duration
+        const influence = Math.min(1, 0.4 + duration * 0.4);
+        state.targetX = state.targetX * (1 - influence) + x * influence;
+        state.targetY = state.targetY * (1 - influence) + y * influence;
+        state.touchActive = true;
+
+        // Clear touch active flag after a moment of no updates
+        clearTimeout(this.ambientTouchTimeout);
+        this.ambientTouchTimeout = setTimeout(() => {
+            state.touchActive = false;
+        }, 200);
     }
 
     // ========== COMMON METHODS ==========
@@ -680,7 +977,7 @@ export class AudioEngine {
             chords: ['X: Note | β: Cutoff', 'Multi-touch | γ: Q'],
             karplus: ['X: Note | β: Cutoff', 'Y: Bright | γ: Q'],
             granular: ['X: Base | β: Cutoff', 'Y: Density | γ: Q'],
-            ambient: ['Touch to nudge', 'β: Cutoff | γ: Q']
+            ambient: ['X: Pitch drift | β: Cutoff', 'Y: Brightness | γ: Q']
         };
 
         const l = labels[this.mode] || labels.wavetable;
@@ -804,7 +1101,9 @@ export class AudioEngine {
         const filterMod = clampedBeta / 90;
         this.orientationParams.filterMod = filterMod;
 
-        const tiltCutoff = 80 + ((1 - filterMod) * 7920);
+        // Logarithmic cutoff: more sensitive at low frequencies
+        // filterMod=0 (flat) -> 8000Hz, filterMod=1 (tilted) -> 80Hz
+        const tiltCutoff = 80 * Math.pow(100, 1 - filterMod);
         this.filter.frequency.setTargetAtTime(tiltCutoff, now, 0.1);
 
         const clampedGamma = Math.max(-45, Math.min(45, gamma || 0));
