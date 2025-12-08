@@ -324,9 +324,7 @@ export function initEffectsControls(audio: AudioEngine) {
 
     const updateReverbButton = () => {
         const level = audio.reverbLevel;
-        const label = level === 'off' ? 'Reverb: Off' :
-                      level === 'low' ? 'Reverb: Low' :
-                      level === 'mid' ? 'Reverb: Mid' : 'Reverb: High';
+        const label = level === 'off' ? 'Reverb: Off' : 'Reverb: On';
         reverbBtn.textContent = label;
         reverbBtn.classList.toggle('active', level !== 'off');
     };

@@ -449,8 +449,8 @@ export class AudioEngine {
         this.reverbWetGain.gain.value = 0;
         this.reverbDryGain.gain.value = 1;
 
-        // Set default IR (low) so convolver is ready
-        const defaultIR = this.impulseResponses.get('low');
+        // Set default IR (high) so convolver is ready
+        const defaultIR = this.impulseResponses.get('high');
         if (defaultIR) {
             this.convolver.buffer = defaultIR;
         }
