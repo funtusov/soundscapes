@@ -4,7 +4,7 @@
 
 import { AudioEngine } from './AudioEngine';
 import { initVisualizer, initMelFilterbank, animate } from './visualizer';
-import { initControls, initModeSelector, initScaleControls, initLoopControls, initDeviceOrientation } from './controls';
+import { initControls, initModeSelector, initScaleControls, initLoopControls, initEffectsControls, initDeviceOrientation } from './controls';
 
 // Initialize audio engine
 const audio = new AudioEngine();
@@ -38,11 +38,13 @@ function initApp(e?: Event) {
     document.getElementById('modeSelector')!.style.display = 'flex';
     document.getElementById('scaleControls')!.style.display = 'flex';
     document.getElementById('loopControls')!.style.display = 'flex';
+    document.getElementById('effectsControls')!.style.display = 'flex';
 
     // Initialize UI
     initModeSelector(audio);
     initScaleControls(audio);
     initLoopControls(audio);
+    initEffectsControls(audio);
     initControls(audio);
 
     // Initialize visualizer

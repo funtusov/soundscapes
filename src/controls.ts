@@ -318,3 +318,29 @@ export function initLoopControls(audio: AudioEngine) {
     clearBtn.addEventListener('click', handleClear);
     clearBtn.addEventListener('touchend', handleClear);
 }
+
+export function initEffectsControls(audio: AudioEngine) {
+    const reverbBtn = document.getElementById('reverbBtn')!;
+
+    const updateReverbButton = () => {
+        const level = audio.reverbLevel;
+        const label = level === 'off' ? 'Reverb: Off' :
+                      level === 'low' ? 'Reverb: Low' :
+                      level === 'mid' ? 'Reverb: Mid' : 'Reverb: High';
+        reverbBtn.textContent = label;
+        reverbBtn.classList.toggle('active', level !== 'off');
+    };
+
+    const handleReverb = (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
+        audio.cycleReverb();
+        updateReverbButton();
+    };
+
+    reverbBtn.addEventListener('click', handleReverb);
+    reverbBtn.addEventListener('touchend', handleReverb);
+
+    // Initialize button state
+    updateReverbButton();
+}

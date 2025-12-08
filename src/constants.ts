@@ -160,6 +160,24 @@ export const SHAKE_ACCELERATION_THRESHOLD = 5;
 /** FM ratio rotation threshold */
 export const FM_ROTATION_THRESHOLD = 30;
 
+// ============ REVERB CONSTANTS ============
+
+/** Reverb levels with wet/dry mix and decay time */
+export const REVERB_PRESETS = {
+    off: { wet: 0, dry: 1, decay: 0 },
+    low: { wet: 0.2, dry: 0.85, decay: 1.0 },
+    mid: { wet: 0.4, dry: 0.7, decay: 2.0 },
+    high: { wet: 0.6, dry: 0.5, decay: 3.5 }
+} as const;
+
+export type ReverbLevel = keyof typeof REVERB_PRESETS;
+
+/** Order for cycling through reverb levels */
+export const REVERB_CYCLE: ReverbLevel[] = ['off', 'low', 'mid', 'high'];
+
+/** Sample rate for impulse response generation */
+export const REVERB_SAMPLE_RATE = 48000;
+
 // ============ BUFFER POOL CONSTANTS ============
 
 /** Maximum number of buffers to keep in Karplus-Strong pool */

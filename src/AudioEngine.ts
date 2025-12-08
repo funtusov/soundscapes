@@ -38,8 +38,11 @@ import {
     SCALE_PATTERNS,
     SHAKE_ACCELERATION_THRESHOLD,
     FM_ROTATION_THRESHOLD,
+    REVERB_PRESETS,
+    REVERB_CYCLE,
     clamp,
-    type SynthesisMode
+    type SynthesisMode,
+    type ReverbLevel
 } from './constants';
 
 // ============ TYPE DEFINITIONS ============
@@ -235,6 +238,13 @@ export class AudioEngine {
     // Buffer pool for Karplus-Strong to avoid repeated allocations
     private karplusBufferPool: PooledBuffer[] = [];
 
+    // Reverb effect chain
+    private convolver: ConvolverNode | null = null;
+    private reverbWetGain: GainNode | null = null;
+    private reverbDryGain: GainNode | null = null;
+    reverbLevel: ReverbLevel = 'off';
+    private impulseResponses: Map<ReverbLevel, AudioBuffer> = new Map();
+
     constructor() {
         // Silent audio for iOS unlock
         this.silentAudio = new Audio("data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYNAAAAAAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYNAAAAAAAAAAAAAAAAAAAA");
@@ -270,6 +280,9 @@ export class AudioEngine {
         // Panner
         this.panner = this.ctx.createStereoPanner();
 
+        // Initialize reverb (creates convolver, wet/dry gains, impulse responses)
+        this.initReverb();
+
         // Delay
         const delayL = this.ctx.createDelay();
         const delayR = this.ctx.createDelay();
@@ -278,12 +291,24 @@ export class AudioEngine {
         delayR.delayTime.value = DELAY_TIME_RIGHT;
         this.delayFeedback.gain.value = DELAY_FEEDBACK_NORMAL;
 
-        // Routing
+        // Routing with reverb
+        // Signal flow: Filter → Panner → [Dry/Wet split] → MasterGain → Analyser → Destination
         this.filter.connect(this.panner);
-        this.panner.connect(this.masterGain);
+
+        // Dry path: Panner → DryGain → MasterGain
+        this.panner.connect(this.reverbDryGain!);
+        this.reverbDryGain!.connect(this.masterGain);
+
+        // Wet path: Panner → Convolver → WetGain → MasterGain
+        this.panner.connect(this.convolver!);
+        this.convolver!.connect(this.reverbWetGain!);
+        this.reverbWetGain!.connect(this.masterGain);
+
+        // Master output
         this.masterGain.connect(this.analyser);
         this.analyser.connect(this.ctx.destination);
 
+        // Delay feedback loop (from master)
         this.masterGain.connect(delayL);
         this.masterGain.connect(delayR);
         delayL.connect(this.delayFeedback);
@@ -370,6 +395,94 @@ export class AudioEngine {
             }
         }
         // Buffer wasn't in pool (temporary), let GC handle it
+    }
+
+    // ============ CONVOLUTION REVERB ============
+
+    private generateImpulseResponse(decayTime: number): AudioBuffer {
+        if (!this.ctx) throw new Error('No audio context');
+
+        const sampleRate = this.ctx.sampleRate;
+        const length = Math.floor(sampleRate * decayTime);
+        const buffer = this.ctx.createBuffer(2, length, sampleRate);
+
+        for (let channel = 0; channel < 2; channel++) {
+            const data = buffer.getChannelData(channel);
+            for (let i = 0; i < length; i++) {
+                // Exponential decay with noise
+                const decay = Math.exp(-3 * i / length);
+                // Stereo decorrelation with slightly different noise per channel
+                const noise = (Math.random() * 2 - 1) * (channel === 0 ? 1 : 0.95);
+                data[i] = noise * decay;
+
+                // Add some early reflections for more natural sound
+                if (i < sampleRate * 0.05) {
+                    const earlyDecay = Math.exp(-10 * i / (sampleRate * 0.05));
+                    data[i] += (Math.random() * 2 - 1) * earlyDecay * 0.5;
+                }
+            }
+        }
+
+        return buffer;
+    }
+
+    private initReverb(): void {
+        if (!this.ctx) return;
+
+        // Create convolver
+        this.convolver = this.ctx.createConvolver();
+
+        // Create wet/dry mix gains
+        this.reverbWetGain = this.ctx.createGain();
+        this.reverbDryGain = this.ctx.createGain();
+
+        // Generate impulse responses for each level
+        for (const level of REVERB_CYCLE) {
+            if (level !== 'off') {
+                const preset = REVERB_PRESETS[level];
+                const ir = this.generateImpulseResponse(preset.decay);
+                this.impulseResponses.set(level, ir);
+            }
+        }
+
+        // Set initial state (off)
+        this.reverbWetGain.gain.value = 0;
+        this.reverbDryGain.gain.value = 1;
+
+        // Set default IR (low) so convolver is ready
+        const defaultIR = this.impulseResponses.get('low');
+        if (defaultIR) {
+            this.convolver.buffer = defaultIR;
+        }
+    }
+
+    setReverbLevel(level: ReverbLevel): void {
+        if (!this.ctx || !this.reverbWetGain || !this.reverbDryGain || !this.convolver) return;
+
+        const now = this.ctx.currentTime;
+        const preset = REVERB_PRESETS[level];
+
+        // Update wet/dry mix with smooth transition
+        this.reverbWetGain.gain.setTargetAtTime(preset.wet, now, 0.1);
+        this.reverbDryGain.gain.setTargetAtTime(preset.dry, now, 0.1);
+
+        // Update impulse response if not off
+        if (level !== 'off') {
+            const ir = this.impulseResponses.get(level);
+            if (ir) {
+                this.convolver.buffer = ir;
+            }
+        }
+
+        this.reverbLevel = level;
+    }
+
+    cycleReverb(): ReverbLevel {
+        const currentIndex = REVERB_CYCLE.indexOf(this.reverbLevel);
+        const nextIndex = (currentIndex + 1) % REVERB_CYCLE.length;
+        const nextLevel = REVERB_CYCLE[nextIndex];
+        this.setReverbLevel(nextLevel);
+        return nextLevel;
     }
 
     cleanupMode(): void {

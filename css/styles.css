@@ -257,3 +257,39 @@ canvas {
     0%, 100% { box-shadow: 0 0 5px rgba(255, 51, 51, 0.5); }
     50% { box-shadow: 0 0 15px rgba(255, 51, 51, 0.8); }
 }
+
+/* Effects controls */
+.effects-controls {
+    position: absolute;
+    bottom: 50px;
+    right: 10px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    z-index: 16;
+}
+
+.effect-btn {
+    padding: 6px 12px;
+    border: 1px solid rgba(150, 100, 255, 0.5);
+    background: rgba(0, 0, 0, 0.6);
+    color: rgba(150, 100, 255, 0.8);
+    font-size: 0.75rem;
+    font-family: 'Courier New', monospace;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.2s;
+    text-transform: uppercase;
+}
+
+.effect-btn:hover {
+    background: rgba(150, 100, 255, 0.15);
+}
+
+.effect-btn.active {
+    border-color: rgba(150, 100, 255, 0.9);
+    color: rgba(150, 100, 255, 1);
+    background: rgba(150, 100, 255, 0.2);
+    box-shadow: 0 0 8px rgba(150, 100, 255, 0.4);
+}
