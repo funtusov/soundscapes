@@ -28,6 +28,7 @@ import {
     KARPLUS_MIN_PLUCK_INTERVAL,
     KARPLUS_REPLUCK_INTERVAL,
     KARPLUS_DECAY_DURATION,
+    KARPLUS_BUFFER_POOL_SIZE,
     AMBIENT_BASE_FREQ,
     AMBIENT_LFO_SLOW,
     AMBIENT_LFO_MEDIUM,
@@ -81,6 +82,12 @@ interface ChordVoice {
 
 interface KarplusVoice {
     lastRepluck: number;
+}
+
+interface PooledBuffer {
+    buffer: AudioBuffer;
+    size: number;
+    inUse: boolean;
 }
 
 interface GranularOsc {
@@ -225,6 +232,9 @@ export class AudioEngine {
     ambientInterval: ReturnType<typeof setInterval> | null = null;
     ambientTouchTimeout: ReturnType<typeof setTimeout> | null = null;
 
+    // Buffer pool for Karplus-Strong to avoid repeated allocations
+    private karplusBufferPool: PooledBuffer[] = [];
+
     constructor() {
         // Silent audio for iOS unlock
         this.silentAudio = new Audio("data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYNAAAAAAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYNAAAAAAAAAAAAAAAAAAAA");
@@ -326,6 +336,40 @@ export class AudioEngine {
     private cleanupGain(gain: GainNode | null | undefined): void {
         if (!gain) return;
         try { gain.disconnect(); } catch (e) { /* ignore */ }
+    }
+
+    // ============ BUFFER POOL FOR KARPLUS-STRONG ============
+
+    private getPooledBuffer(size: number): AudioBuffer | null {
+        if (!this.ctx) return null;
+
+        // Look for an available buffer of the right size
+        for (const pooled of this.karplusBufferPool) {
+            if (!pooled.inUse && pooled.size >= size && pooled.size <= size * 2) {
+                pooled.inUse = true;
+                return pooled.buffer;
+            }
+        }
+
+        // Create a new buffer if pool isn't full
+        if (this.karplusBufferPool.length < KARPLUS_BUFFER_POOL_SIZE) {
+            const buffer = this.ctx.createBuffer(1, size, this.ctx.sampleRate);
+            this.karplusBufferPool.push({ buffer, size, inUse: true });
+            return buffer;
+        }
+
+        // Pool is full and no suitable buffer found - create temporary one
+        return this.ctx.createBuffer(1, size, this.ctx.sampleRate);
+    }
+
+    private releasePooledBuffer(buffer: AudioBuffer): void {
+        for (const pooled of this.karplusBufferPool) {
+            if (pooled.buffer === buffer) {
+                pooled.inUse = false;
+                return;
+            }
+        }
+        // Buffer wasn't in pool (temporary), let GC handle it
     }
 
     cleanupMode(): void {
@@ -692,9 +736,12 @@ export class AudioEngine {
         nodes.lastPluck = now;
 
         const bufferSize = Math.floor(this.ctx.sampleRate / freq);
-        const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const buffer = this.getPooledBuffer(bufferSize);
+        if (!buffer) return;
+
         const data = buffer.getChannelData(0);
 
+        // Fill with noise and apply lowpass filter
         for (let i = 0; i < bufferSize; i++) {
             data[i] = Math.random() * 2 - 1;
         }
@@ -720,8 +767,10 @@ export class AudioEngine {
         source.start();
         source.stop(now + KARPLUS_DECAY_DURATION + 0.5);
 
+        // Release buffer back to pool after sound finishes
         setTimeout(() => {
             try { source.disconnect(); env.disconnect(); lpf.disconnect(); } catch (e) { /* ignore */ }
+            this.releasePooledBuffer(buffer);
         }, (KARPLUS_DECAY_DURATION + 1) * 1000);
     }
 

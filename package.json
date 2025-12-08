@@ -8,13 +8,20 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "deploy": "npm run build && netlify deploy --prod --dir=dist",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/funtusov/soundscapes.git"
   },
-  "keywords": ["synthesizer", "web-audio", "instrument", "multitouch"],
+  "keywords": [
+    "synthesizer",
+    "web-audio",
+    "instrument",
+    "multitouch"
+  ],
   "author": "",
   "license": "ISC",
   "bugs": {
@@ -23,6 +30,7 @@
   "homepage": "https://etherpad-soundscape.netlify.app",
   "devDependencies": {
     "typescript": "^5.9.3",
-    "vite": "^7.2.7"
+    "vite": "^7.2.7",
+    "vitest": "^4.0.15"
   }
 }

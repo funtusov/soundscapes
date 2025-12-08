@@ -160,6 +160,14 @@ export const SHAKE_ACCELERATION_THRESHOLD = 5;
 /** FM ratio rotation threshold */
 export const FM_ROTATION_THRESHOLD = 30;
 
+// ============ BUFFER POOL CONSTANTS ============
+
+/** Maximum number of buffers to keep in Karplus-Strong pool */
+export const KARPLUS_BUFFER_POOL_SIZE = 8;
+
+/** Standard buffer sizes for pooling (covers common frequency ranges) */
+export const KARPLUS_BUFFER_SIZES = [128, 256, 512, 1024, 2048] as const;
+
 // ============ LOOP RECORDER CONSTANTS ============
 
 /** Base offset for playback touch IDs to avoid conflicts */

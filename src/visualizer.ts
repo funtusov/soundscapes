@@ -43,6 +43,11 @@ const ripples: Ripple[] = [];
 let spectrogramBuffer: Float32Array[] = [];
 let melFilterbank: Float32Array[] | null = null;
 
+// Offscreen canvas for spectrogram optimization
+let spectrogramCanvas: OffscreenCanvas | HTMLCanvasElement | null = null;
+let spectrogramCtx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null = null;
+let spectrogramReady = false;
+
 function createMelFilterbank(fftSize: number, sampleRate: number, numMelBins: number, minFreq: number, maxFreq: number): Float32Array[] {
     const numFftBins = fftSize / 2;
     const melMin = hzToMel(minFreq);
@@ -115,6 +120,25 @@ function resize() {
     height = window.innerHeight;
     canvas.width = width;
     canvas.height = height;
+
+    // Recreate offscreen spectrogram canvas
+    initSpectrogramCanvas();
+}
+
+function initSpectrogramCanvas() {
+    // Use OffscreenCanvas if available, otherwise fallback to HTMLCanvasElement
+    if (typeof OffscreenCanvas !== 'undefined') {
+        spectrogramCanvas = new OffscreenCanvas(width, height);
+    } else {
+        spectrogramCanvas = document.createElement('canvas');
+        spectrogramCanvas.width = width;
+        spectrogramCanvas.height = height;
+    }
+    spectrogramCtx = spectrogramCanvas.getContext('2d');
+    spectrogramReady = false;
+
+    // Clear the spectrogram buffer on resize
+    spectrogramBuffer = [];
 }
 
 function drawGrid() {
@@ -137,21 +161,39 @@ function drawGrid() {
     }
 }
 
+function intensityToColor(intensity: number): [number, number, number] {
+    let r: number, g: number, b: number;
+    if (intensity < 0.15) {
+        const t = intensity / 0.15;
+        r = 0; g = 0; b = Math.floor(80 * t);
+    } else if (intensity < 0.3) {
+        const t = (intensity - 0.15) / 0.15;
+        r = 0; g = Math.floor(30 * t); b = Math.floor(80 + 120 * t);
+    } else if (intensity < 0.45) {
+        const t = (intensity - 0.3) / 0.15;
+        r = Math.floor(180 * t); g = Math.floor(30 * (1 - t)); b = Math.floor(200 - 40 * t);
+    } else if (intensity < 0.6) {
+        const t = (intensity - 0.45) / 0.15;
+        r = Math.floor(180 + 75 * t); g = 0; b = Math.floor(160 - 160 * t);
+    } else if (intensity < 0.75) {
+        const t = (intensity - 0.6) / 0.15;
+        r = 255; g = Math.floor(120 * t); b = 0;
+    } else if (intensity < 0.9) {
+        const t = (intensity - 0.75) / 0.15;
+        r = 255; g = Math.floor(120 + 135 * t); b = 0;
+    } else {
+        const t = (intensity - 0.9) / 0.1;
+        r = 255; g = 255; b = Math.floor(255 * t);
+    }
+    return [r, g, b];
+}
+
 function drawSpectrogram(audio: AudioEngine) {
     const data = audio.getAnalysis();
-    if (!data) return;
-
-    if (!melFilterbank) {
-        initMelFilterbank(audio);
-    }
+    if (!data || !melFilterbank || !spectrogramCtx || !spectrogramCanvas) return;
 
     const melSpectrum = fftToMel(data);
     if (!melSpectrum) return;
-
-    spectrogramBuffer.push(melSpectrum);
-    if (spectrogramBuffer.length > SPECTROGRAM_HISTORY) {
-        spectrogramBuffer.shift();
-    }
 
     const colWidth = Math.ceil(width / SPECTROGRAM_HISTORY);
     const rowHeight = Math.ceil(height / MEL_BINS);
@@ -159,44 +201,68 @@ function drawSpectrogram(audio: AudioEngine) {
     const minVal = SPECTROGRAM_MIN_VAL;
     const maxVal = SPECTROGRAM_MAX_VAL;
 
-    for (let t = 0; t < spectrogramBuffer.length; t++) {
-        const frame = spectrogramBuffer[t];
-        const x = Math.floor(t * width / SPECTROGRAM_HISTORY);
+    // Optimized approach: scroll existing content left and draw only new column
+    if (spectrogramReady) {
+        // Scroll existing content left by one column width
+        spectrogramCtx.drawImage(
+            spectrogramCanvas,
+            colWidth, 0, width - colWidth, height,
+            0, 0, width - colWidth, height
+        );
 
+        // Clear the rightmost column
+        spectrogramCtx.fillStyle = 'rgb(5, 5, 10)';
+        spectrogramCtx.fillRect(width - colWidth, 0, colWidth, height);
+
+        // Draw only the new column on the right edge
+        const x = width - colWidth;
         for (let f = 0; f < MEL_BINS; f++) {
-            let intensity = (frame[f] - minVal) / (maxVal - minVal);
+            let intensity = (melSpectrum[f] - minVal) / (maxVal - minVal);
             intensity = Math.max(0, Math.min(1, intensity));
             intensity = Math.pow(intensity, 0.8);
 
-            let r: number, g: number, b: number;
-            if (intensity < 0.15) {
-                const t = intensity / 0.15;
-                r = 0; g = 0; b = Math.floor(80 * t);
-            } else if (intensity < 0.3) {
-                const t = (intensity - 0.15) / 0.15;
-                r = 0; g = Math.floor(30 * t); b = Math.floor(80 + 120 * t);
-            } else if (intensity < 0.45) {
-                const t = (intensity - 0.3) / 0.15;
-                r = Math.floor(180 * t); g = Math.floor(30 * (1 - t)); b = Math.floor(200 - 40 * t);
-            } else if (intensity < 0.6) {
-                const t = (intensity - 0.45) / 0.15;
-                r = Math.floor(180 + 75 * t); g = 0; b = Math.floor(160 - 160 * t);
-            } else if (intensity < 0.75) {
-                const t = (intensity - 0.6) / 0.15;
-                r = 255; g = Math.floor(120 * t); b = 0;
-            } else if (intensity < 0.9) {
-                const t = (intensity - 0.75) / 0.15;
-                r = 255; g = Math.floor(120 + 135 * t); b = 0;
-            } else {
-                const t = (intensity - 0.9) / 0.1;
-                r = 255; g = 255; b = Math.floor(255 * t);
-            }
-
-            ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+            const [r, g, b] = intensityToColor(intensity);
+            spectrogramCtx.fillStyle = `rgb(${r}, ${g}, ${b})`;
             const y = height - Math.floor((f + 1) * height / MEL_BINS);
-            ctx.fillRect(x, y, colWidth, rowHeight);
+            spectrogramCtx.fillRect(x, y, colWidth, rowHeight);
+        }
+    } else {
+        // First frame - need to build up buffer and draw fully
+        spectrogramBuffer.push(melSpectrum);
+        if (spectrogramBuffer.length > SPECTROGRAM_HISTORY) {
+            spectrogramBuffer.shift();
+        }
+
+        // Fill background
+        spectrogramCtx.fillStyle = 'rgb(5, 5, 10)';
+        spectrogramCtx.fillRect(0, 0, width, height);
+
+        // Draw all columns
+        for (let t = 0; t < spectrogramBuffer.length; t++) {
+            const frame = spectrogramBuffer[t];
+            const x = Math.floor(t * width / SPECTROGRAM_HISTORY);
+
+            for (let f = 0; f < MEL_BINS; f++) {
+                let intensity = (frame[f] - minVal) / (maxVal - minVal);
+                intensity = Math.max(0, Math.min(1, intensity));
+                intensity = Math.pow(intensity, 0.8);
+
+                const [r, g, b] = intensityToColor(intensity);
+                spectrogramCtx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+                const y = height - Math.floor((f + 1) * height / MEL_BINS);
+                spectrogramCtx.fillRect(x, y, colWidth, rowHeight);
+            }
+        }
+
+        // Mark as ready once buffer is full
+        if (spectrogramBuffer.length >= SPECTROGRAM_HISTORY) {
+            spectrogramReady = true;
+            spectrogramBuffer = []; // Free memory - no longer needed
         }
     }
+
+    // Copy spectrogram to main canvas
+    ctx.drawImage(spectrogramCanvas as CanvasImageSource, 0, 0);
 }
 
 function drawCursor() {

@@ -3,7 +3,7 @@
  */
 
 import { AudioEngine } from './AudioEngine';
-import { initVisualizer, animate } from './visualizer';
+import { initVisualizer, initMelFilterbank, animate } from './visualizer';
 import { initControls, initModeSelector, initScaleControls, initLoopControls, initDeviceOrientation } from './controls';
 
 // Initialize audio engine
@@ -29,6 +29,9 @@ function initApp(e?: Event) {
     // Initialize audio
     audio.init();
     audio.resume();
+
+    // Initialize mel filterbank for spectrogram (once, not lazily)
+    initMelFilterbank(audio);
 
     // Hide overlay, show controls
     overlay.classList.add('hidden');
