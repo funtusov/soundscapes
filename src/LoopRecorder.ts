@@ -3,6 +3,7 @@
  */
 
 import type { AudioEngine } from './AudioEngine';
+import { LOOP_TOUCH_ID_OFFSET, LOOP_ITERATION_OFFSET } from './constants';
 
 type TouchId = number | string;
 
@@ -35,7 +36,6 @@ export class LoopRecorder {
     loopDuration = 0;
     playbackStartTime = 0;
     activePlaybackTouches = new Map<number, PlaybackTouchData>();
-    touchIdOffset = 10000;
     playbackAnimationFrame: number | null = null;
     lastLoopTime = 0;
     lastLoopCount = 0;
@@ -137,7 +137,7 @@ export class LoopRecorder {
 
     executeEvent(event: LoopEvent, loopCount: number) {
         // Create unique touch ID for this playback instance
-        const playbackTouchId = this.touchIdOffset + Number(event.touchId) + (loopCount * 1000);
+        const playbackTouchId = LOOP_TOUCH_ID_OFFSET + Number(event.touchId) + (loopCount * LOOP_ITERATION_OFFSET);
 
         switch (event.type) {
             case 'start':

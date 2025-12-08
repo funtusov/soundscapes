@@ -3,6 +3,22 @@
  */
 
 import type { AudioEngine } from './AudioEngine';
+import {
+    SPECTROGRAM_HISTORY,
+    MEL_BINS,
+    MEL_MIN_FREQ,
+    MEL_MAX_FREQ,
+    SPECTROGRAM_MIN_VAL,
+    SPECTROGRAM_MAX_VAL,
+    CONTROL_BAR_HEIGHT,
+    CURSOR_GLOW_RADIUS,
+    CURSOR_DOT_RADIUS,
+    RIPPLE_INITIAL_RADIUS,
+    RIPPLE_EXPANSION_RATE,
+    RIPPLE_DECAY_RATE,
+    hzToMel,
+    melToHz
+} from './constants';
 
 type TouchId = number | string;
 
@@ -18,9 +34,6 @@ interface Ripple {
     o: number;
 }
 
-const SPECTROGRAM_HISTORY = 120;
-const MEL_BINS = 256;
-
 let canvas: HTMLCanvasElement;
 let ctx: CanvasRenderingContext2D;
 let width = 0;
@@ -29,15 +42,6 @@ const cursors = new Map<TouchId, CursorPos>();
 const ripples: Ripple[] = [];
 let spectrogramBuffer: Float32Array[] = [];
 let melFilterbank: Float32Array[] | null = null;
-
-// Mel scale helpers
-function hzToMel(hz: number): number {
-    return 2595 * Math.log10(1 + hz / 700);
-}
-
-function melToHz(mel: number): number {
-    return 700 * (Math.pow(10, mel / 2595) - 1);
-}
 
 function createMelFilterbank(fftSize: number, sampleRate: number, numMelBins: number, minFreq: number, maxFreq: number): Float32Array[] {
     const numFftBins = fftSize / 2;
@@ -100,8 +104,8 @@ export function initMelFilterbank(audio: AudioEngine) {
             audio.analyser!.fftSize,
             audio.ctx.sampleRate,
             MEL_BINS,
-            20,
-            8000
+            MEL_MIN_FREQ,
+            MEL_MAX_FREQ
         );
     }
 }
@@ -152,8 +156,8 @@ function drawSpectrogram(audio: AudioEngine) {
     const colWidth = Math.ceil(width / SPECTROGRAM_HISTORY);
     const rowHeight = Math.ceil(height / MEL_BINS);
 
-    const minVal = -90;
-    const maxVal = -20;
+    const minVal = SPECTROGRAM_MIN_VAL;
+    const maxVal = SPECTROGRAM_MAX_VAL;
 
     for (let t = 0; t < spectrogramBuffer.length; t++) {
         const frame = spectrogramBuffer[t];
@@ -199,19 +203,19 @@ function drawCursor() {
     if (cursors.size === 0) return;
 
     for (const [, pos] of cursors) {
-        const gradient = ctx.createRadialGradient(pos.x, pos.y, 5, pos.x, pos.y, 60);
+        const gradient = ctx.createRadialGradient(pos.x, pos.y, CURSOR_DOT_RADIUS, pos.x, pos.y, CURSOR_GLOW_RADIUS);
         gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
         gradient.addColorStop(0.2, 'rgba(0, 255, 204, 0.8)');
         gradient.addColorStop(1, 'rgba(0, 255, 204, 0)');
 
         ctx.fillStyle = gradient;
         ctx.beginPath();
-        ctx.arc(pos.x, pos.y, 60, 0, Math.PI * 2);
+        ctx.arc(pos.x, pos.y, CURSOR_GLOW_RADIUS, 0, Math.PI * 2);
         ctx.fill();
 
         ctx.fillStyle = '#fff';
         ctx.beginPath();
-        ctx.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
+        ctx.arc(pos.x, pos.y, CURSOR_DOT_RADIUS, 0, Math.PI * 2);
         ctx.fill();
     }
 }
@@ -224,14 +228,14 @@ function drawRipples() {
         ctx.beginPath();
         ctx.arc(rip.x, rip.y, rip.r, 0, Math.PI * 2);
         ctx.stroke();
-        rip.r += 2;
-        rip.o -= 0.02;
+        rip.r += RIPPLE_EXPANSION_RATE;
+        rip.o -= RIPPLE_DECAY_RATE;
         if (rip.o <= 0) ripples.splice(i, 1);
     }
 }
 
 export function addRipple(x: number, y: number) {
-    ripples.push({ x, y, r: 10, o: 1.0 });
+    ripples.push({ x, y, r: RIPPLE_INITIAL_RADIUS, o: 1.0 });
 }
 
 export function setCursor(x: number, y: number, touchId: TouchId = 'mouse') {
@@ -243,8 +247,7 @@ export function removeCursor(touchId: TouchId = 'mouse') {
 }
 
 function drawWaveformZones() {
-    const controlHeight = 130;
-    const playableHeight = height - controlHeight;
+    const playableHeight = height - CONTROL_BAR_HEIGHT;
     const zoneHeight = playableHeight / 4;
 
     // Zone colors (very subtle)
@@ -333,6 +336,328 @@ function drawSquareWave(cx: number, cy: number, w: number, h: number) {
     ctx.stroke();
 }
 
+// ============ THEREMIN ZONES (Y = Vibrato Depth) ============
+function drawThereminZones() {
+    const playableHeight = height - CONTROL_BAR_HEIGHT;
+    const zoneHeight = playableHeight / 3;
+
+    const zones = [
+        { name: 'INTENSE', color: 'rgba(255, 100, 200, 0.06)', vibrato: 'high' },
+        { name: 'MODERATE', color: 'rgba(200, 150, 255, 0.06)', vibrato: 'mid' },
+        { name: 'SUBTLE', color: 'rgba(150, 200, 255, 0.06)', vibrato: 'low' }
+    ];
+
+    zones.forEach((zone, i) => {
+        const y = i * zoneHeight;
+
+        ctx.fillStyle = zone.color;
+        ctx.fillRect(0, y, width, zoneHeight);
+
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, y + zoneHeight);
+        ctx.lineTo(width, y + zoneHeight);
+        ctx.stroke();
+
+        // Draw vibrato wave visualization
+        drawVibratoWave(width - 60, y + zoneHeight / 2, 40, 15, zone.vibrato);
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.font = '10px Courier New';
+        ctx.textAlign = 'right';
+        ctx.fillText(zone.name, width - 15, y + zoneHeight / 2 + 25);
+    });
+}
+
+function drawVibratoWave(cx: number, cy: number, w: number, h: number, intensity: string) {
+    const freq = intensity === 'high' ? 4 : intensity === 'mid' ? 2.5 : 1.5;
+    const amp = intensity === 'high' ? 1 : intensity === 'mid' ? 0.6 : 0.3;
+    const color = intensity === 'high' ? 'rgba(255, 100, 200, 0.4)' :
+                  intensity === 'mid' ? 'rgba(200, 150, 255, 0.35)' : 'rgba(150, 200, 255, 0.3)';
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i <= w; i++) {
+        const x = cx - w/2 + i;
+        const y = cy + Math.sin((i / w) * Math.PI * freq) * h/2 * amp;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+}
+
+// ============ FM ZONES (Y = Modulation Index) ============
+function drawFMZones() {
+    const playableHeight = height - CONTROL_BAR_HEIGHT;
+    const zoneHeight = playableHeight / 3;
+
+    const zones = [
+        { name: 'CHAOTIC', color: 'rgba(255, 50, 150, 0.06)', complexity: 'high' },
+        { name: 'RICH', color: 'rgba(255, 150, 50, 0.06)', complexity: 'mid' },
+        { name: 'CLEAN', color: 'rgba(100, 200, 150, 0.06)', complexity: 'low' }
+    ];
+
+    zones.forEach((zone, i) => {
+        const y = i * zoneHeight;
+
+        ctx.fillStyle = zone.color;
+        ctx.fillRect(0, y, width, zoneHeight);
+
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, y + zoneHeight);
+        ctx.lineTo(width, y + zoneHeight);
+        ctx.stroke();
+
+        // Draw FM spectrum visualization
+        drawFMSpectrum(width - 60, y + zoneHeight / 2, 40, 20, zone.complexity);
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.font = '10px Courier New';
+        ctx.textAlign = 'right';
+        ctx.fillText(zone.name, width - 15, y + zoneHeight / 2 + 25);
+    });
+}
+
+function drawFMSpectrum(cx: number, cy: number, w: number, h: number, complexity: string) {
+    const bars = complexity === 'high' ? 7 : complexity === 'mid' ? 5 : 3;
+    const color = complexity === 'high' ? 'rgba(255, 50, 150, 0.4)' :
+                  complexity === 'mid' ? 'rgba(255, 150, 50, 0.35)' : 'rgba(100, 200, 150, 0.3)';
+
+    ctx.fillStyle = color;
+    const barWidth = w / (bars * 2);
+    const centerBar = Math.floor(bars / 2);
+
+    for (let i = 0; i < bars; i++) {
+        const dist = Math.abs(i - centerBar);
+        const barH = h * (1 - dist * 0.2);
+        const x = cx - w/2 + i * barWidth * 2 + barWidth/2;
+        ctx.fillRect(x, cy - barH/2, barWidth, barH);
+    }
+}
+
+// ============ CHORDS ZONES (Duration = Waveform Morph) ============
+function drawChordsZones() {
+    const playableHeight = height - CONTROL_BAR_HEIGHT;
+
+    // Light background hint for multi-touch
+    ctx.fillStyle = 'rgba(100, 150, 255, 0.03)';
+    ctx.fillRect(0, 0, width, playableHeight);
+
+    // Duration indicator on left edge
+    const indicatorWidth = 40;
+    const zoneHeight = playableHeight / 3;
+
+    const zones = [
+        { name: 'SAW', color: 'rgba(255, 200, 100, 0.15)', time: '>2s', drawWave: drawSawWave },
+        { name: 'TRI', color: 'rgba(100, 255, 200, 0.15)', time: '0.7-2s', drawWave: drawTriWave },
+        { name: 'SINE', color: 'rgba(100, 150, 255, 0.15)', time: '<0.7s', drawWave: drawSineWave }
+    ];
+
+    // Draw "HOLD" label at top
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.font = '9px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText('HOLD', indicatorWidth / 2, 15);
+
+    // Draw arrow pointing down
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(indicatorWidth / 2, 22);
+    ctx.lineTo(indicatorWidth / 2, playableHeight - 20);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(indicatorWidth / 2 - 5, playableHeight - 30);
+    ctx.lineTo(indicatorWidth / 2, playableHeight - 20);
+    ctx.lineTo(indicatorWidth / 2 + 5, playableHeight - 30);
+    ctx.stroke();
+
+    zones.forEach((zone, i) => {
+        const y = i * zoneHeight;
+
+        // Small zone indicator on left
+        ctx.fillStyle = zone.color;
+        ctx.fillRect(5, y + 10, indicatorWidth - 10, zoneHeight - 20);
+
+        // Waveform icon
+        const waveColor = zone.name === 'SAW' ? 'rgba(255, 200, 100, 0.4)' :
+                         zone.name === 'TRI' ? 'rgba(100, 255, 200, 0.4)' : 'rgba(100, 150, 255, 0.4)';
+        ctx.strokeStyle = waveColor;
+        zone.drawWave(indicatorWidth / 2, y + zoneHeight / 2, 20, 10);
+
+        // Time label
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+        ctx.font = '8px Courier New';
+        ctx.textAlign = 'center';
+        ctx.fillText(zone.time, indicatorWidth / 2, y + zoneHeight / 2 + 20);
+    });
+}
+
+// ============ KARPLUS-STRONG ZONES (Y = Brightness) ============
+function drawKarplusZones() {
+    const playableHeight = height - CONTROL_BAR_HEIGHT;
+    const zoneHeight = playableHeight / 3;
+
+    const zones = [
+        { name: 'BRIGHT', color: 'rgba(255, 230, 100, 0.06)', material: 'steel' },
+        { name: 'WARM', color: 'rgba(255, 180, 100, 0.06)', material: 'nylon' },
+        { name: 'MUTED', color: 'rgba(150, 100, 180, 0.06)', material: 'gut' }
+    ];
+
+    zones.forEach((zone, i) => {
+        const y = i * zoneHeight;
+
+        ctx.fillStyle = zone.color;
+        ctx.fillRect(0, y, width, zoneHeight);
+
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, y + zoneHeight);
+        ctx.lineTo(width, y + zoneHeight);
+        ctx.stroke();
+
+        // Draw string visualization
+        drawStringViz(width - 60, y + zoneHeight / 2, 40, 15, zone.material);
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.font = '10px Courier New';
+        ctx.textAlign = 'right';
+        ctx.fillText(zone.name, width - 15, y + zoneHeight / 2 + 25);
+    });
+}
+
+function drawStringViz(cx: number, cy: number, w: number, h: number, material: string) {
+    const decay = material === 'steel' ? 0.3 : material === 'nylon' ? 0.5 : 0.8;
+    const color = material === 'steel' ? 'rgba(255, 230, 100, 0.4)' :
+                  material === 'nylon' ? 'rgba(255, 180, 100, 0.35)' : 'rgba(150, 100, 180, 0.3)';
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i <= w; i++) {
+        const x = cx - w/2 + i;
+        const envelope = Math.exp(-i / w * 3 * decay);
+        const y = cy + Math.sin((i / w) * Math.PI * 4) * h/2 * envelope;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+}
+
+// ============ GRANULAR ZONES (Y = Density) ============
+function drawGranularZones() {
+    const playableHeight = height - CONTROL_BAR_HEIGHT;
+    const zoneHeight = playableHeight / 3;
+
+    const zones = [
+        { name: 'DENSE', color: 'rgba(255, 100, 255, 0.06)', density: 'high' },
+        { name: 'MEDIUM', color: 'rgba(200, 150, 200, 0.06)', density: 'mid' },
+        { name: 'SPARSE', color: 'rgba(150, 180, 220, 0.06)', density: 'low' }
+    ];
+
+    zones.forEach((zone, i) => {
+        const y = i * zoneHeight;
+
+        ctx.fillStyle = zone.color;
+        ctx.fillRect(0, y, width, zoneHeight);
+
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, y + zoneHeight);
+        ctx.lineTo(width, y + zoneHeight);
+        ctx.stroke();
+
+        // Draw grain cloud visualization
+        drawGrainCloud(width - 60, y + zoneHeight / 2, 40, 20, zone.density);
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.font = '10px Courier New';
+        ctx.textAlign = 'right';
+        ctx.fillText(zone.name, width - 15, y + zoneHeight / 2 + 25);
+    });
+}
+
+function drawGrainCloud(cx: number, cy: number, w: number, h: number, density: string) {
+    const count = density === 'high' ? 12 : density === 'mid' ? 7 : 4;
+    const size = density === 'high' ? 2 : density === 'mid' ? 2.5 : 3;
+    const color = density === 'high' ? 'rgba(255, 100, 255, 0.5)' :
+                  density === 'mid' ? 'rgba(200, 150, 200, 0.4)' : 'rgba(150, 180, 220, 0.35)';
+
+    ctx.fillStyle = color;
+    // Use deterministic positions based on density
+    const seed = density === 'high' ? 1 : density === 'mid' ? 2 : 3;
+    for (let i = 0; i < count; i++) {
+        const angle = (i / count) * Math.PI * 2 + seed;
+        const dist = (0.3 + (i % 3) * 0.25) * Math.min(w, h) / 2;
+        const x = cx + Math.cos(angle) * dist;
+        const y = cy + Math.sin(angle) * dist * 0.6;
+        ctx.beginPath();
+        ctx.arc(x, y, size, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+// ============ AMBIENT ZONES (Y = Mood/Brightness) ============
+function drawAmbientZones() {
+    const playableHeight = height - CONTROL_BAR_HEIGHT;
+    const zoneHeight = playableHeight / 3;
+
+    const zones = [
+        { name: 'AIRY', color: 'rgba(200, 230, 255, 0.06)', mood: 'bright' },
+        { name: 'CALM', color: 'rgba(150, 180, 200, 0.06)', mood: 'neutral' },
+        { name: 'DEEP', color: 'rgba(80, 100, 150, 0.06)', mood: 'dark' }
+    ];
+
+    zones.forEach((zone, i) => {
+        const y = i * zoneHeight;
+
+        ctx.fillStyle = zone.color;
+        ctx.fillRect(0, y, width, zoneHeight);
+
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, y + zoneHeight);
+        ctx.lineTo(width, y + zoneHeight);
+        ctx.stroke();
+
+        // Draw mood visualization
+        drawMoodWave(width - 60, y + zoneHeight / 2, 40, 15, zone.mood);
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.font = '10px Courier New';
+        ctx.textAlign = 'right';
+        ctx.fillText(zone.name, width - 15, y + zoneHeight / 2 + 25);
+    });
+}
+
+function drawMoodWave(cx: number, cy: number, w: number, h: number, mood: string) {
+    const freq = mood === 'bright' ? 3 : mood === 'neutral' ? 2 : 1;
+    const layers = mood === 'bright' ? 3 : mood === 'neutral' ? 2 : 1;
+    const baseColor = mood === 'bright' ? [200, 230, 255] :
+                      mood === 'neutral' ? [150, 180, 200] : [80, 100, 150];
+
+    for (let l = layers - 1; l >= 0; l--) {
+        ctx.strokeStyle = `rgba(${baseColor[0]}, ${baseColor[1]}, ${baseColor[2]}, ${0.2 + l * 0.1})`;
+        ctx.lineWidth = 1.5 - l * 0.3;
+        ctx.beginPath();
+        for (let i = 0; i <= w; i++) {
+            const x = cx - w/2 + i;
+            const offset = l * 0.5;
+            const y = cy + Math.sin((i / w) * Math.PI * freq + offset) * h/2 * (1 - l * 0.2);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+    }
+}
+
 export function animate(audio: AudioEngine) {
     ctx.fillStyle = 'rgb(5, 5, 10)';
     ctx.fillRect(0, 0, width, height);
@@ -340,8 +665,14 @@ export function animate(audio: AudioEngine) {
     drawSpectrogram(audio);
 
     // Draw mode-specific overlays (after spectrogram so they're visible)
-    if (audio.mode === 'wavetable') {
-        drawWaveformZones();
+    switch (audio.mode) {
+        case 'wavetable': drawWaveformZones(); break;
+        case 'theremin': drawThereminZones(); break;
+        case 'fm': drawFMZones(); break;
+        case 'chords': drawChordsZones(); break;
+        case 'karplus': drawKarplusZones(); break;
+        case 'granular': drawGranularZones(); break;
+        case 'ambient': drawAmbientZones(); break;
     }
 
     drawGrid();

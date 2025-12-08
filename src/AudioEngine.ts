@@ -1,10 +1,207 @@
 /**
  * AUDIO ENGINE - Multi-mode Synthesizer
+ * Properly typed with voice limiting and input validation
  */
-// @ts-nocheck
-// TODO: Add proper TypeScript types incrementally
 
-type TouchId = number | string;
+import {
+    MAX_VOICES,
+    MASTER_GAIN,
+    AMBIENT_MASTER_GAIN,
+    VOICE_GAIN,
+    DELAY_FEEDBACK_NORMAL,
+    DELAY_FEEDBACK_SHAKE,
+    SHAKE_DURATION_MS,
+    DELAY_TIME_LEFT,
+    DELAY_TIME_RIGHT,
+    FILTER_MIN_FREQ,
+    FILTER_MAX_FREQ,
+    FILTER_Q_MIN,
+    FILTER_Q_MAX,
+    FILTER_Q_DEFAULT,
+    FFT_SIZE,
+    ANALYSER_SMOOTHING,
+    ANALYSER_MIN_DB,
+    ANALYSER_MAX_DB,
+    RELEASE_TIME_BASE,
+    RELEASE_TIME_MAX_ADDITION,
+    VOICE_CLEANUP_BUFFER_MS,
+    KARPLUS_MIN_PLUCK_INTERVAL,
+    KARPLUS_REPLUCK_INTERVAL,
+    KARPLUS_DECAY_DURATION,
+    AMBIENT_BASE_FREQ,
+    AMBIENT_LFO_SLOW,
+    AMBIENT_LFO_MEDIUM,
+    AMBIENT_LOOP_INTERVAL,
+    AMBIENT_TOUCH_TIMEOUT,
+    NOTE_NAMES,
+    SCALE_PATTERNS,
+    SHAKE_ACCELERATION_THRESHOLD,
+    FM_ROTATION_THRESHOLD,
+    clamp,
+    type SynthesisMode
+} from './constants';
+
+// ============ TYPE DEFINITIONS ============
+
+export type TouchId = number | string;
+
+// Extend Window for Safari AudioContext
+declare global {
+    interface Window {
+        webkitAudioContext: typeof AudioContext;
+    }
+}
+
+// Voice types for each synthesis mode
+interface WavetableVoice {
+    osc: OscillatorNode;
+    gain: GainNode;
+    lfo: OscillatorNode;
+    lfoGain: GainNode;
+}
+
+interface ThereminVoice {
+    osc: OscillatorNode;
+    gain: GainNode;
+    vibrato: OscillatorNode;
+    vibratoGain: GainNode;
+}
+
+interface FMVoice {
+    carrier: OscillatorNode;
+    carrierGain: GainNode;
+    modulator: OscillatorNode;
+    modulatorGain: GainNode;
+}
+
+interface ChordVoice {
+    osc: OscillatorNode;
+    gain: GainNode;
+}
+
+interface KarplusVoice {
+    lastRepluck: number;
+}
+
+interface GranularOsc {
+    osc: OscillatorNode;
+    gain: GainNode;
+}
+
+interface GranularVoice {
+    oscs: GranularOsc[];
+    lfo: OscillatorNode;
+    lfoGain: GainNode;
+}
+
+interface DroneOsc {
+    osc: OscillatorNode;
+    gain: GainNode;
+    baseDetune: number;
+}
+
+interface DroneVoice {
+    oscs: DroneOsc[];
+    voiceGain: GainNode;
+    panner: StereoPannerNode;
+    baseFreq: number;
+    panBase: number;
+    detunePhase: number;
+    panPhase: number;
+}
+
+interface NoiseBed {
+    source: AudioBufferSourceNode;
+    bandpass: BiquadFilterNode;
+    lowpass: BiquadFilterNode;
+    gain: GainNode;
+    panner: StereoPannerNode;
+    filterPhase: number;
+}
+
+interface ShimmerPartial {
+    osc: OscillatorNode;
+    gain: GainNode;
+    tremolo: OscillatorNode;
+    tremoloGain: GainNode;
+    ratio: number;
+}
+
+interface ShimmerLayer {
+    partials: ShimmerPartial[];
+    masterGain: GainNode;
+}
+
+interface AmbientState {
+    x: number;
+    y: number;
+    targetX: number;
+    targetY: number;
+    microPhase: number;
+    mesoPhase: number;
+    macroPhase: number;
+    walkX: number;
+    walkY: number;
+    walkVelX: number;
+    walkVelY: number;
+    isActive: boolean;
+    touchActive: boolean;
+}
+
+interface OrientationParams {
+    pan: number;
+    filterMod: number;
+    lfoRate: number;
+    shake: number;
+}
+
+interface NoteInfo {
+    freq: number;
+    semitone: number;
+    noteName: string;
+    octave: number;
+    isQuantized: boolean;
+}
+
+// Node container types
+interface WavetableNodes {
+    voices: Map<TouchId, WavetableVoice>;
+}
+
+interface ThereminNodes {
+    voices: Map<TouchId, ThereminVoice>;
+}
+
+interface FMNodes {
+    voices: Map<TouchId, FMVoice>;
+    ratio: number;
+}
+
+interface ChordsNodes {
+    voices: Map<TouchId, ChordVoice>;
+}
+
+interface KarplusNodes {
+    voices: Map<TouchId, KarplusVoice>;
+    lastPluck: number;
+}
+
+interface GranularNodes {
+    voices: Map<TouchId, GranularVoice>;
+}
+
+interface AmbientNodes {
+    drones: DroneVoice[];
+    noiseBed: NoiseBed;
+    shimmer: ShimmerLayer;
+    lfoSlow: OscillatorNode;
+    lfoMedium: OscillatorNode;
+    baseFreq: number;
+}
+
+type ModeNodes = WavetableNodes | ThereminNodes | FMNodes | ChordsNodes | KarplusNodes | GranularNodes | AmbientNodes | Record<string, unknown>;
+
+// ============ AUDIO ENGINE CLASS ============
 
 export class AudioEngine {
     ctx: AudioContext | null = null;
@@ -15,37 +212,32 @@ export class AudioEngine {
     analyser: AnalyserNode | null = null;
     isPlaying = false;
     dataArray: Float32Array | null = null;
-    mode = 'wavetable';
-    nodes: Record<string, any> = {};
-    touches = new Map<TouchId, any>();
-    orientationParams = { pan: 0, filterMod: 0, lfoRate: 0, shake: 0 };
+    mode: SynthesisMode = 'wavetable';
+    nodes: ModeNodes = {};
+    touches = new Map<TouchId, unknown>();
+    orientationParams: OrientationParams = { pan: 0, filterMod: 0, lfoRate: 0, shake: 0 };
     isQuantized = false;
-    tonic = 9;
+    tonic = 9; // A
     scaleType = 'minor';
-    scalePatterns: Record<string, number[]> = {
-        major: [0, 2, 4, 5, 7, 9, 11],
-        minor: [0, 2, 3, 5, 7, 8, 10],
-        pentatonic: [0, 2, 4, 7, 9],
-        chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
-    };
     scale = [0, 3, 5, 7, 10, 12, 15, 17, 19, 22, 24];
     silentAudio: HTMLAudioElement;
-    ambientState: any;
-    ambientInterval: any;
-    ambientTouchTimeout: any;
+    ambientState: AmbientState | null = null;
+    ambientInterval: ReturnType<typeof setInterval> | null = null;
+    ambientTouchTimeout: ReturnType<typeof setTimeout> | null = null;
+
     constructor() {
-        // Silent audio for iOS
+        // Silent audio for iOS unlock
         this.silentAudio = new Audio("data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYNAAAAAAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYNAAAAAAAAAAAAAAAAAAAA");
         this.silentAudio.loop = true;
     }
 
-    init() {
+    init(): void {
         if (this.ctx) {
-            try { this.ctx.close(); } catch(e) {}
+            try { this.ctx.close(); } catch (e) { /* ignore */ }
         }
 
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        this.ctx = new AudioContext();
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        this.ctx = new AudioContextClass();
 
         // Master chain
         this.masterGain = this.ctx.createGain();
@@ -53,17 +245,17 @@ export class AudioEngine {
 
         // Analyser
         this.analyser = this.ctx.createAnalyser();
-        this.analyser.fftSize = 4096;
-        this.analyser.smoothingTimeConstant = 0.1;
-        this.analyser.minDecibels = -100;
-        this.analyser.maxDecibels = -10;
+        this.analyser.fftSize = FFT_SIZE;
+        this.analyser.smoothingTimeConstant = ANALYSER_SMOOTHING;
+        this.analyser.minDecibels = ANALYSER_MIN_DB;
+        this.analyser.maxDecibels = ANALYSER_MAX_DB;
         this.dataArray = new Float32Array(this.analyser.frequencyBinCount);
 
         // Filter
         this.filter = this.ctx.createBiquadFilter();
         this.filter.type = 'lowpass';
-        this.filter.Q.value = 1;
-        this.filter.frequency.value = 8000;
+        this.filter.Q.value = FILTER_Q_DEFAULT;
+        this.filter.frequency.value = FILTER_MAX_FREQ;
 
         // Panner
         this.panner = this.ctx.createStereoPanner();
@@ -72,9 +264,9 @@ export class AudioEngine {
         const delayL = this.ctx.createDelay();
         const delayR = this.ctx.createDelay();
         this.delayFeedback = this.ctx.createGain();
-        delayL.delayTime.value = 0.25;
-        delayR.delayTime.value = 0.35;
-        this.delayFeedback.gain.value = 0.25;
+        delayL.delayTime.value = DELAY_TIME_LEFT;
+        delayR.delayTime.value = DELAY_TIME_RIGHT;
+        this.delayFeedback.gain.value = DELAY_FEEDBACK_NORMAL;
 
         // Routing
         this.filter.connect(this.panner);
@@ -94,11 +286,26 @@ export class AudioEngine {
         this.initMode(this.mode);
     }
 
-    initMode(mode) {
+    // ============ VOICE COUNT HELPERS ============
+
+    private getVoiceCount(): number {
+        if ('voices' in this.nodes && this.nodes.voices instanceof Map) {
+            return this.nodes.voices.size;
+        }
+        return 0;
+    }
+
+    private canAddVoice(): boolean {
+        return this.getVoiceCount() < MAX_VOICES;
+    }
+
+    // ============ MODE INITIALIZATION ============
+
+    initMode(mode: SynthesisMode): void {
         this.cleanupMode();
         this.mode = mode;
 
-        switch(mode) {
+        switch (mode) {
             case 'wavetable': this.initWavetable(); break;
             case 'theremin': this.initTheremin(); break;
             case 'fm': this.initFM(); break;
@@ -111,7 +318,17 @@ export class AudioEngine {
         this.updateHUDLabels();
     }
 
-    cleanupMode() {
+    private cleanupOscillator(osc: OscillatorNode | null | undefined): void {
+        if (!osc) return;
+        try { osc.stop(); osc.disconnect(); } catch (e) { /* ignore */ }
+    }
+
+    private cleanupGain(gain: GainNode | null | undefined): void {
+        if (!gain) return;
+        try { gain.disconnect(); } catch (e) { /* ignore */ }
+    }
+
+    cleanupMode(): void {
         if (this.ambientInterval) {
             clearInterval(this.ambientInterval);
             this.ambientInterval = null;
@@ -121,92 +338,93 @@ export class AudioEngine {
             this.ambientTouchTimeout = null;
         }
 
-        if (this.nodes.oscillators) {
-            this.nodes.oscillators.forEach(o => {
-                try { o.osc.stop(); o.osc.disconnect(); o.gain.disconnect(); } catch(e) {}
-            });
-        }
-        if (this.nodes.layers) {
-            this.nodes.layers.forEach(l => {
-                try { l.osc.stop(); l.osc.disconnect(); l.gain.disconnect(); } catch(e) {}
-            });
-        }
-        if (this.nodes.voices) {
-            this.nodes.voices.forEach(v => {
-                try {
-                    if (v.osc) { v.osc.stop(); v.osc.disconnect(); }
-                    if (v.gain) v.gain.disconnect();
-                    if (v.lfo) { v.lfo.stop(); v.lfo.disconnect(); }
-                    if (v.vibrato) { v.vibrato.stop(); v.vibrato.disconnect(); }
-                    if (v.carrier) { v.carrier.stop(); v.carrier.disconnect(); }
-                    if (v.modulator) { v.modulator.stop(); v.modulator.disconnect(); }
-                    if (v.oscs) {
-                        v.oscs.forEach(o => { o.osc.stop(); o.osc.disconnect(); o.gain.disconnect(); });
+        // Cleanup wavetable/theremin/fm/chords voices
+        if ('voices' in this.nodes && this.nodes.voices instanceof Map) {
+            for (const voice of this.nodes.voices.values()) {
+                const v = voice as Record<string, unknown>;
+                this.cleanupOscillator(v.osc as OscillatorNode);
+                this.cleanupOscillator(v.lfo as OscillatorNode);
+                this.cleanupOscillator(v.vibrato as OscillatorNode);
+                this.cleanupOscillator(v.carrier as OscillatorNode);
+                this.cleanupOscillator(v.modulator as OscillatorNode);
+                this.cleanupGain(v.gain as GainNode);
+                this.cleanupGain(v.lfoGain as GainNode);
+                this.cleanupGain(v.vibratoGain as GainNode);
+                this.cleanupGain(v.carrierGain as GainNode);
+                this.cleanupGain(v.modulatorGain as GainNode);
+
+                // Granular oscs
+                if (Array.isArray(v.oscs)) {
+                    for (const o of v.oscs) {
+                        this.cleanupOscillator((o as GranularOsc).osc);
+                        this.cleanupGain((o as GranularOsc).gain);
                     }
-                } catch(e) {}
-            });
+                }
+            }
         }
-        // Cleanup ambient mode v2 nodes
-        if (this.nodes.drones) {
-            this.nodes.drones.forEach(drone => {
-                try {
-                    drone.oscs.forEach(o => { o.osc.stop(); o.osc.disconnect(); o.gain.disconnect(); });
-                    drone.voiceGain.disconnect();
-                    drone.panner.disconnect();
-                } catch(e) {}
-            });
+
+        // Cleanup ambient mode drones
+        if ('drones' in this.nodes && Array.isArray(this.nodes.drones)) {
+            for (const drone of this.nodes.drones as DroneVoice[]) {
+                for (const o of drone.oscs) {
+                    this.cleanupOscillator(o.osc);
+                    this.cleanupGain(o.gain);
+                }
+                this.cleanupGain(drone.voiceGain);
+                try { drone.panner.disconnect(); } catch (e) { /* ignore */ }
+            }
         }
-        if (this.nodes.noiseBed) {
+
+        // Cleanup noise bed
+        if ('noiseBed' in this.nodes && this.nodes.noiseBed) {
+            const nb = this.nodes.noiseBed as NoiseBed;
             try {
-                this.nodes.noiseBed.source.stop();
-                this.nodes.noiseBed.source.disconnect();
-                this.nodes.noiseBed.bandpass.disconnect();
-                this.nodes.noiseBed.lowpass.disconnect();
-                this.nodes.noiseBed.gain.disconnect();
-                this.nodes.noiseBed.panner.disconnect();
-            } catch(e) {}
+                nb.source.stop();
+                nb.source.disconnect();
+                nb.bandpass.disconnect();
+                nb.lowpass.disconnect();
+                nb.gain.disconnect();
+                nb.panner.disconnect();
+            } catch (e) { /* ignore */ }
         }
-        if (this.nodes.shimmer) {
-            try {
-                this.nodes.shimmer.partials.forEach(p => {
-                    p.osc.stop(); p.osc.disconnect();
-                    p.gain.disconnect();
-                    p.tremolo.stop(); p.tremolo.disconnect();
-                    p.tremoloGain.disconnect();
-                });
-                this.nodes.shimmer.masterGain.disconnect();
-            } catch(e) {}
+
+        // Cleanup shimmer
+        if ('shimmer' in this.nodes && this.nodes.shimmer) {
+            const sh = this.nodes.shimmer as ShimmerLayer;
+            for (const p of sh.partials) {
+                this.cleanupOscillator(p.osc);
+                this.cleanupOscillator(p.tremolo);
+                this.cleanupGain(p.gain);
+                this.cleanupGain(p.tremoloGain);
+            }
+            this.cleanupGain(sh.masterGain);
         }
-        if (this.nodes.noiseSource) {
-            try { this.nodes.noiseSource.stop(); this.nodes.noiseSource.disconnect(); } catch(e) {}
-        }
-        if (this.nodes.lfo) {
-            try { this.nodes.lfo.stop(); this.nodes.lfo.disconnect(); } catch(e) {}
-        }
-        if (this.nodes.lfo1) {
-            try { this.nodes.lfo1.stop(); this.nodes.lfo1.disconnect(); } catch(e) {}
-        }
-        if (this.nodes.lfo2) {
-            try { this.nodes.lfo2.stop(); this.nodes.lfo2.disconnect(); } catch(e) {}
-        }
-        if (this.nodes.lfoSlow) {
-            try { this.nodes.lfoSlow.stop(); this.nodes.lfoSlow.disconnect(); } catch(e) {}
-        }
-        if (this.nodes.lfoMedium) {
-            try { this.nodes.lfoMedium.stop(); this.nodes.lfoMedium.disconnect(); } catch(e) {}
-        }
+
+        // Cleanup LFOs
+        if ('lfoSlow' in this.nodes) this.cleanupOscillator(this.nodes.lfoSlow as OscillatorNode);
+        if ('lfoMedium' in this.nodes) this.cleanupOscillator(this.nodes.lfoMedium as OscillatorNode);
+        if ('lfo' in this.nodes) this.cleanupOscillator(this.nodes.lfo as OscillatorNode);
+        if ('lfo1' in this.nodes) this.cleanupOscillator(this.nodes.lfo1 as OscillatorNode);
+        if ('lfo2' in this.nodes) this.cleanupOscillator(this.nodes.lfo2 as OscillatorNode);
+        if ('noiseSource' in this.nodes) this.cleanupOscillator(this.nodes.noiseSource as OscillatorNode);
+
         this.nodes = {};
     }
 
-    // ========== WAVETABLE MODE ==========
-    initWavetable() {
-        this.nodes = { voices: new Map() };
+    // ============ WAVETABLE MODE ============
+
+    private initWavetable(): void {
+        this.nodes = { voices: new Map<TouchId, WavetableVoice>() } as WavetableNodes;
     }
 
-    updateWavetable(x, y, duration = 0, touchId = 0) {
+    private updateWavetable(x: number, y: number, duration = 0, touchId: TouchId = 0): void {
+        if (!this.ctx || !this.filter) return;
+        const nodes = this.nodes as WavetableNodes;
         const now = this.ctx.currentTime;
 
-        if (!this.nodes.voices.has(touchId)) {
+        if (!nodes.voices.has(touchId)) {
+            if (!this.canAddVoice()) return; // Voice limiting
+
             const osc = this.ctx.createOscillator();
             const gain = this.ctx.createGain();
             const lfo = this.ctx.createOscillator();
@@ -226,14 +444,14 @@ export class AudioEngine {
             osc.start();
             lfo.start();
 
-            this.nodes.voices.set(touchId, { osc, gain, lfo, lfoGain });
+            nodes.voices.set(touchId, { osc, gain, lfo, lfoGain });
         }
 
-        const voice = this.nodes.voices.get(touchId);
+        const voice = nodes.voices.get(touchId)!;
         const note = this.quantizeToScale(x, 3, 55);
 
         voice.osc.frequency.setTargetAtTime(note.freq, now, 0.005);
-        voice.gain.gain.setTargetAtTime(0.3, now, 0.005);
+        voice.gain.gain.setTargetAtTime(VOICE_GAIN, now, 0.005);
 
         if (y < 0.25) voice.osc.type = 'sine';
         else if (y < 0.5) voice.osc.type = 'triangle';
@@ -244,35 +462,41 @@ export class AudioEngine {
         voice.lfoGain.gain.setTargetAtTime(durationFactor * 30, now, 0.1);
         voice.lfo.frequency.setTargetAtTime(2 + durationFactor * 4, now, 0.1);
 
-        document.getElementById('val-freq').innerText = note.noteName + note.octave;
-        document.getElementById('val-harm').innerText = voice.osc.type + (duration > 0.5 ? ' ~' : '');
+        this.updateHUD(note.noteName + note.octave, voice.osc.type + (duration > 0.5 ? ' ~' : ''));
     }
 
-    stopWavetableVoice(touchId, releaseTime = 0.1) {
-        if (this.nodes.voices && this.nodes.voices.has(touchId)) {
-            const voice = this.nodes.voices.get(touchId);
-            const now = this.ctx.currentTime;
-            voice.gain.gain.setTargetAtTime(0, now, releaseTime);
-            setTimeout(() => {
-                try {
-                    voice.osc.stop(); voice.lfo.stop();
-                    voice.osc.disconnect(); voice.lfo.disconnect();
-                    voice.gain.disconnect(); voice.lfoGain.disconnect();
-                } catch(e) {}
-                this.nodes.voices.delete(touchId);
-            }, releaseTime * 1000 + 200);
-        }
+    private stopWavetableVoice(touchId: TouchId, releaseTime = 0.1): void {
+        if (!this.ctx) return;
+        const nodes = this.nodes as WavetableNodes;
+        if (!nodes.voices?.has(touchId)) return;
+
+        const voice = nodes.voices.get(touchId)!;
+        const now = this.ctx.currentTime;
+        voice.gain.gain.setTargetAtTime(0, now, releaseTime);
+
+        setTimeout(() => {
+            this.cleanupOscillator(voice.osc);
+            this.cleanupOscillator(voice.lfo);
+            this.cleanupGain(voice.gain);
+            this.cleanupGain(voice.lfoGain);
+            nodes.voices.delete(touchId);
+        }, releaseTime * 1000 + VOICE_CLEANUP_BUFFER_MS);
     }
 
-    // ========== THEREMIN MODE ==========
-    initTheremin() {
-        this.nodes = { voices: new Map() };
+    // ============ THEREMIN MODE ============
+
+    private initTheremin(): void {
+        this.nodes = { voices: new Map<TouchId, ThereminVoice>() } as ThereminNodes;
     }
 
-    updateTheremin(x, y, duration = 0, touchId = 0) {
+    private updateTheremin(x: number, y: number, duration = 0, touchId: TouchId = 0): void {
+        if (!this.ctx || !this.filter) return;
+        const nodes = this.nodes as ThereminNodes;
         const now = this.ctx.currentTime;
 
-        if (!this.nodes.voices.has(touchId)) {
+        if (!nodes.voices.has(touchId)) {
+            if (!this.canAddVoice()) return;
+
             const osc = this.ctx.createOscillator();
             const gain = this.ctx.createGain();
             const vibrato = this.ctx.createOscillator();
@@ -292,49 +516,55 @@ export class AudioEngine {
             osc.start();
             vibrato.start();
 
-            this.nodes.voices.set(touchId, { osc, gain, vibrato, vibratoGain });
+            nodes.voices.set(touchId, { osc, gain, vibrato, vibratoGain });
         }
 
-        const voice = this.nodes.voices.get(touchId);
+        const voice = nodes.voices.get(touchId)!;
         const note = this.quantizeToScale(x, 3, 110);
 
         voice.osc.frequency.setTargetAtTime(note.freq, now, 0.05);
-        voice.gain.gain.setTargetAtTime(0.3, now, 0.02);
+        voice.gain.gain.setTargetAtTime(VOICE_GAIN, now, 0.02);
 
         const durationFactor = Math.min(1, duration / 2);
         const vibratoDepth = y * 15 + durationFactor * 10;
         voice.vibratoGain.gain.setTargetAtTime(vibratoDepth, now, 0.05);
         voice.vibrato.frequency.setTargetAtTime(5 + durationFactor * 2, now, 0.1);
 
-        document.getElementById('val-freq').innerText = note.noteName + note.octave;
-        document.getElementById('val-harm').innerText = this.nodes.voices.size + ' voice' + (duration > 0.5 ? ' ♪' : '');
+        this.updateHUD(note.noteName + note.octave, nodes.voices.size + ' voice' + (duration > 0.5 ? ' ♪' : ''));
     }
 
-    stopThereminVoice(touchId, releaseTime = 0.1) {
-        if (this.nodes.voices && this.nodes.voices.has(touchId)) {
-            const voice = this.nodes.voices.get(touchId);
-            const now = this.ctx.currentTime;
-            voice.gain.gain.setTargetAtTime(0, now, releaseTime);
-            setTimeout(() => {
-                try {
-                    voice.osc.stop(); voice.vibrato.stop();
-                    voice.osc.disconnect(); voice.vibrato.disconnect();
-                    voice.gain.disconnect(); voice.vibratoGain.disconnect();
-                } catch(e) {}
-                this.nodes.voices.delete(touchId);
-            }, releaseTime * 1000 + 200);
-        }
+    private stopThereminVoice(touchId: TouchId, releaseTime = 0.1): void {
+        if (!this.ctx) return;
+        const nodes = this.nodes as ThereminNodes;
+        if (!nodes.voices?.has(touchId)) return;
+
+        const voice = nodes.voices.get(touchId)!;
+        const now = this.ctx.currentTime;
+        voice.gain.gain.setTargetAtTime(0, now, releaseTime);
+
+        setTimeout(() => {
+            this.cleanupOscillator(voice.osc);
+            this.cleanupOscillator(voice.vibrato);
+            this.cleanupGain(voice.gain);
+            this.cleanupGain(voice.vibratoGain);
+            nodes.voices.delete(touchId);
+        }, releaseTime * 1000 + VOICE_CLEANUP_BUFFER_MS);
     }
 
-    // ========== FM SYNTHESIS MODE ==========
-    initFM() {
-        this.nodes = { voices: new Map(), ratio: 1 };
+    // ============ FM SYNTHESIS MODE ============
+
+    private initFM(): void {
+        this.nodes = { voices: new Map<TouchId, FMVoice>(), ratio: 1 } as FMNodes;
     }
 
-    updateFM(x, y, duration = 0, touchId = 0) {
+    private updateFM(x: number, y: number, duration = 0, touchId: TouchId = 0): void {
+        if (!this.ctx || !this.filter) return;
+        const nodes = this.nodes as FMNodes;
         const now = this.ctx.currentTime;
 
-        if (!this.nodes.voices.has(touchId)) {
+        if (!nodes.voices.has(touchId)) {
+            if (!this.canAddVoice()) return;
+
             const carrier = this.ctx.createOscillator();
             const carrierGain = this.ctx.createGain();
             const modulator = this.ctx.createOscillator();
@@ -355,52 +585,58 @@ export class AudioEngine {
             carrier.start();
             modulator.start();
 
-            this.nodes.voices.set(touchId, { carrier, carrierGain, modulator, modulatorGain });
+            nodes.voices.set(touchId, { carrier, carrierGain, modulator, modulatorGain });
         }
 
-        const voice = this.nodes.voices.get(touchId);
+        const voice = nodes.voices.get(touchId)!;
         const note = this.quantizeToScale(x, 3, 55);
         const carrierFreq = note.freq;
 
         const durationFactor = Math.min(1, duration / 3);
         const baseIndex = y * 4;
         const modIndex = baseIndex + durationFactor * 6;
-        const modFreq = carrierFreq * this.nodes.ratio;
+        const modFreq = carrierFreq * nodes.ratio;
 
         voice.carrier.frequency.setTargetAtTime(carrierFreq, now, 0.02);
         voice.modulator.frequency.setTargetAtTime(modFreq, now, 0.02);
         voice.modulatorGain.gain.setTargetAtTime(modIndex * carrierFreq, now, 0.02);
-        voice.carrierGain.gain.setTargetAtTime(0.3, now, 0.02);
+        voice.carrierGain.gain.setTargetAtTime(VOICE_GAIN, now, 0.02);
 
-        document.getElementById('val-freq').innerText = note.noteName + note.octave;
-        document.getElementById('val-harm').innerText = 'idx:' + modIndex.toFixed(1) + (durationFactor > 0.3 ? '⚡' : '');
+        this.updateHUD(note.noteName + note.octave, 'idx:' + modIndex.toFixed(1) + (durationFactor > 0.3 ? '⚡' : ''));
     }
 
-    stopFMVoice(touchId, releaseTime = 0.1) {
-        if (this.nodes.voices && this.nodes.voices.has(touchId)) {
-            const voice = this.nodes.voices.get(touchId);
-            const now = this.ctx.currentTime;
-            voice.carrierGain.gain.setTargetAtTime(0, now, releaseTime);
-            setTimeout(() => {
-                try {
-                    voice.carrier.stop(); voice.modulator.stop();
-                    voice.carrier.disconnect(); voice.modulator.disconnect();
-                    voice.carrierGain.disconnect(); voice.modulatorGain.disconnect();
-                } catch(e) {}
-                this.nodes.voices.delete(touchId);
-            }, releaseTime * 1000 + 200);
-        }
+    private stopFMVoice(touchId: TouchId, releaseTime = 0.1): void {
+        if (!this.ctx) return;
+        const nodes = this.nodes as FMNodes;
+        if (!nodes.voices?.has(touchId)) return;
+
+        const voice = nodes.voices.get(touchId)!;
+        const now = this.ctx.currentTime;
+        voice.carrierGain.gain.setTargetAtTime(0, now, releaseTime);
+
+        setTimeout(() => {
+            this.cleanupOscillator(voice.carrier);
+            this.cleanupOscillator(voice.modulator);
+            this.cleanupGain(voice.carrierGain);
+            this.cleanupGain(voice.modulatorGain);
+            nodes.voices.delete(touchId);
+        }, releaseTime * 1000 + VOICE_CLEANUP_BUFFER_MS);
     }
 
-    // ========== CHORDS MODE ==========
-    initChords() {
-        this.nodes = { voices: new Map() };
+    // ============ CHORDS MODE ============
+
+    private initChords(): void {
+        this.nodes = { voices: new Map<TouchId, ChordVoice>() } as ChordsNodes;
     }
 
-    updateChords(x, y, touchId = 0, duration = 0) {
+    private updateChords(x: number, _y: number, touchId: TouchId = 0, duration = 0): void {
+        if (!this.ctx || !this.filter) return;
+        const nodes = this.nodes as ChordsNodes;
         const now = this.ctx.currentTime;
 
-        if (!this.nodes.voices.has(touchId)) {
+        if (!nodes.voices.has(touchId)) {
+            if (!this.canAddVoice()) return;
+
             const osc = this.ctx.createOscillator();
             const gain = this.ctx.createGain();
             osc.type = 'sine';
@@ -408,45 +644,52 @@ export class AudioEngine {
             gain.connect(this.filter);
             gain.gain.value = 0;
             osc.start();
-            this.nodes.voices.set(touchId, { osc, gain });
+            nodes.voices.set(touchId, { osc, gain });
         }
 
-        const voice = this.nodes.voices.get(touchId);
+        const voice = nodes.voices.get(touchId)!;
         const note = this.quantizeToScale(x, 3, 110);
 
         voice.osc.frequency.setTargetAtTime(note.freq, now, 0.02);
-        voice.gain.gain.setTargetAtTime(0.3, now, 0.02);
+        voice.gain.gain.setTargetAtTime(VOICE_GAIN, now, 0.02);
 
         const durationFactor = Math.min(1, duration / 2);
         if (durationFactor < 0.33) voice.osc.type = 'sine';
         else if (durationFactor < 0.66) voice.osc.type = 'triangle';
         else voice.osc.type = 'sawtooth';
 
-        document.getElementById('val-freq').innerText = note.noteName + note.octave;
-        document.getElementById('val-harm').innerText = this.nodes.voices.size + ' voice ' + voice.osc.type.substring(0,3);
+        this.updateHUD(note.noteName + note.octave, nodes.voices.size + ' voice ' + voice.osc.type.substring(0, 3));
     }
 
-    stopChordVoice(touchId, releaseTime = 0.1) {
-        if (this.nodes.voices && this.nodes.voices.has(touchId)) {
-            const voice = this.nodes.voices.get(touchId);
-            const now = this.ctx.currentTime;
-            voice.gain.gain.setTargetAtTime(0, now, releaseTime);
-            setTimeout(() => {
-                try { voice.osc.stop(); voice.osc.disconnect(); voice.gain.disconnect(); } catch(e) {}
-                this.nodes.voices.delete(touchId);
-            }, releaseTime * 1000 + 200);
-        }
-    }
+    private stopChordVoice(touchId: TouchId, releaseTime = 0.1): void {
+        if (!this.ctx) return;
+        const nodes = this.nodes as ChordsNodes;
+        if (!nodes.voices?.has(touchId)) return;
 
-    // ========== KARPLUS-STRONG MODE ==========
-    initKarplus() {
-        this.nodes = { voices: new Map(), lastPluck: 0 };
-    }
-
-    pluckString(freq, brightness) {
+        const voice = nodes.voices.get(touchId)!;
         const now = this.ctx.currentTime;
-        if (now - this.nodes.lastPluck < 0.03) return;
-        this.nodes.lastPluck = now;
+        voice.gain.gain.setTargetAtTime(0, now, releaseTime);
+
+        setTimeout(() => {
+            this.cleanupOscillator(voice.osc);
+            this.cleanupGain(voice.gain);
+            nodes.voices.delete(touchId);
+        }, releaseTime * 1000 + VOICE_CLEANUP_BUFFER_MS);
+    }
+
+    // ============ KARPLUS-STRONG MODE ============
+
+    private initKarplus(): void {
+        this.nodes = { voices: new Map<TouchId, KarplusVoice>(), lastPluck: 0 } as KarplusNodes;
+    }
+
+    private pluckString(freq: number, brightness: number): void {
+        if (!this.ctx || !this.filter) return;
+        const nodes = this.nodes as KarplusNodes;
+        const now = this.ctx.currentTime;
+
+        if (now - nodes.lastPluck < KARPLUS_MIN_PLUCK_INTERVAL) return;
+        nodes.lastPluck = now;
 
         const bufferSize = Math.floor(this.ctx.sampleRate / freq);
         const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
@@ -456,7 +699,7 @@ export class AudioEngine {
             data[i] = Math.random() * 2 - 1;
         }
         for (let i = 1; i < bufferSize; i++) {
-            data[i] = data[i] * brightness + data[i-1] * (1 - brightness);
+            data[i] = data[i] * brightness + data[i - 1] * (1 - brightness);
         }
 
         const source = this.ctx.createBufferSource();
@@ -465,7 +708,7 @@ export class AudioEngine {
 
         const env = this.ctx.createGain();
         env.gain.setValueAtTime(0.4, now);
-        env.gain.exponentialRampToValueAtTime(0.001, now + 2);
+        env.gain.exponentialRampToValueAtTime(0.001, now + KARPLUS_DECAY_DURATION);
 
         const lpf = this.ctx.createBiquadFilter();
         lpf.type = 'lowpass';
@@ -475,48 +718,53 @@ export class AudioEngine {
         lpf.connect(env);
         env.connect(this.filter);
         source.start();
-        source.stop(now + 2.5);
+        source.stop(now + KARPLUS_DECAY_DURATION + 0.5);
 
         setTimeout(() => {
-            try { source.disconnect(); env.disconnect(); lpf.disconnect(); } catch(e) {}
-        }, 3000);
+            try { source.disconnect(); env.disconnect(); lpf.disconnect(); } catch (e) { /* ignore */ }
+        }, (KARPLUS_DECAY_DURATION + 1) * 1000);
     }
 
-    updateKarplus(x, y, duration = 0, touchId = 0) {
+    private updateKarplus(x: number, y: number, duration = 0, touchId: TouchId = 0): void {
+        const nodes = this.nodes as KarplusNodes;
         const now = Date.now() / 1000;
 
-        if (!this.nodes.voices.has(touchId)) {
-            this.nodes.voices.set(touchId, { lastRepluck: 0 });
+        if (!nodes.voices.has(touchId)) {
+            if (!this.canAddVoice()) return;
+            nodes.voices.set(touchId, { lastRepluck: 0 });
         }
-        const voice = this.nodes.voices.get(touchId);
+
+        const voice = nodes.voices.get(touchId)!;
         const note = this.quantizeToScale(x, 3, 110);
 
         if (duration < 0.2) {
             this.pluckString(note.freq, 0.3 + y * 0.6);
             voice.lastRepluck = now;
-        } else if (duration > 0.5 && now - voice.lastRepluck > 0.25) {
+        } else if (duration > 0.5 && now - voice.lastRepluck > KARPLUS_REPLUCK_INTERVAL) {
             this.pluckString(note.freq, 0.2 + y * 0.4);
             voice.lastRepluck = now;
         }
 
-        const mode = duration > 0.5 ? 'bow' : 'pluck';
-        document.getElementById('val-freq').innerText = note.noteName + note.octave;
-        document.getElementById('val-harm').innerText = mode + ' ' + this.nodes.voices.size + 'str';
+        const modeStr = duration > 0.5 ? 'bow' : 'pluck';
+        this.updateHUD(note.noteName + note.octave, modeStr + ' ' + nodes.voices.size + 'str');
     }
 
-    // ========== GRANULAR MODE ==========
-    initGranular() {
-        this.nodes = { voices: new Map() };
+    // ============ GRANULAR MODE ============
+
+    private initGranular(): void {
+        this.nodes = { voices: new Map<TouchId, GranularVoice>() } as GranularNodes;
     }
 
-    createGranularVoice() {
-        const oscs = [];
+    private createGranularVoice(): GranularVoice | null {
+        if (!this.ctx || !this.filter) return null;
+
+        const oscs: GranularOsc[] = [];
         const baseFreq = 110;
 
         for (let i = 0; i < 4; i++) {
             const osc = this.ctx.createOscillator();
             const gain = this.ctx.createGain();
-            osc.type = ['sine', 'triangle', 'sine', 'triangle'][i];
+            osc.type = (['sine', 'triangle', 'sine', 'triangle'] as OscillatorType[])[i];
             osc.frequency.value = baseFreq * (1 + i * 0.5);
             osc.detune.value = (Math.random() - 0.5) * 20;
             gain.gain.value = 0;
@@ -537,14 +785,19 @@ export class AudioEngine {
         return { oscs, lfo, lfoGain };
     }
 
-    updateGranular(x, y, duration = 0, touchId = 0) {
+    private updateGranular(x: number, y: number, duration = 0, touchId: TouchId = 0): void {
+        if (!this.ctx) return;
+        const nodes = this.nodes as GranularNodes;
         const now = this.ctx.currentTime;
 
-        if (!this.nodes.voices.has(touchId)) {
-            this.nodes.voices.set(touchId, this.createGranularVoice());
+        if (!nodes.voices.has(touchId)) {
+            if (!this.canAddVoice()) return;
+            const voice = this.createGranularVoice();
+            if (!voice) return;
+            nodes.voices.set(touchId, voice);
         }
 
-        const voice = this.nodes.voices.get(touchId);
+        const voice = nodes.voices.get(touchId)!;
         const note = this.quantizeToScale(x, 2, 55);
         const baseFreq = note.freq;
         const durationFactor = Math.min(1, duration / 4);
@@ -562,40 +815,42 @@ export class AudioEngine {
         voice.lfo.frequency.setTargetAtTime(0.05 + y * 0.5 + durationFactor * 0.3, now, 0.1);
         voice.lfoGain.gain.setTargetAtTime(10 + durationFactor * 20, now, 0.1);
 
-        document.getElementById('val-freq').innerText = note.noteName + note.octave;
-        document.getElementById('val-harm').innerText = this.nodes.voices.size + 'g ' + Math.round(durationFactor * 100) + '%';
+        this.updateHUD(note.noteName + note.octave, nodes.voices.size + 'g ' + Math.round(durationFactor * 100) + '%');
     }
 
-    stopGranularVoice(touchId, releaseTime = 0.1) {
-        if (this.nodes.voices && this.nodes.voices.has(touchId)) {
-            const voice = this.nodes.voices.get(touchId);
-            const now = this.ctx.currentTime;
-            voice.oscs.forEach(o => o.gain.gain.setTargetAtTime(0, now, releaseTime));
-            setTimeout(() => {
-                try {
-                    voice.oscs.forEach(o => { o.osc.stop(); o.osc.disconnect(); o.gain.disconnect(); });
-                    voice.lfo.stop(); voice.lfo.disconnect(); voice.lfoGain.disconnect();
-                } catch(e) {}
-                this.nodes.voices.delete(touchId);
-            }, releaseTime * 1000 + 200);
-        }
+    private stopGranularVoice(touchId: TouchId, releaseTime = 0.1): void {
+        if (!this.ctx) return;
+        const nodes = this.nodes as GranularNodes;
+        if (!nodes.voices?.has(touchId)) return;
+
+        const voice = nodes.voices.get(touchId)!;
+        const now = this.ctx.currentTime;
+        voice.oscs.forEach(o => o.gain.gain.setTargetAtTime(0, now, releaseTime));
+
+        setTimeout(() => {
+            voice.oscs.forEach(o => {
+                this.cleanupOscillator(o.osc);
+                this.cleanupGain(o.gain);
+            });
+            this.cleanupOscillator(voice.lfo);
+            this.cleanupGain(voice.lfoGain);
+            nodes.voices.delete(touchId);
+        }, releaseTime * 1000 + VOICE_CLEANUP_BUFFER_MS);
     }
 
-    // ========== AMBIENT MODE v2 ==========
-    // Reimagined with: detuned drone clusters, resonant noise bed,
-    // multi-rate modulation, and spatial design
+    // ============ AMBIENT MODE v2 ============
 
-    initAmbient() {
+    private initAmbient(): void {
+        if (!this.ctx || !this.filter) return;
+
         this.ambientState = {
             x: 0.5,
             y: 0.5,
             targetX: 0.5,
             targetY: 0.5,
-            // Multi-rate phases for organic movement
             microPhase: Math.random() * Math.PI * 2,
             mesoPhase: Math.random() * Math.PI * 2,
             macroPhase: Math.random() * Math.PI * 2,
-            // Random walk state
             walkX: 0.5,
             walkY: 0.5,
             walkVelX: 0,
@@ -604,35 +859,28 @@ export class AudioEngine {
             touchActive: false
         };
 
-        // Create drone voices with detuned oscillator clusters
-        const drones = [];
+        const drones: DroneVoice[] = [];
         const droneCount = 4;
-        const baseFreq = 110;
-
-        // Scale degrees for drone voicing (root, 5th, octave, 5th+octave)
+        const baseFreq = AMBIENT_BASE_FREQ;
         const voiceRatios = [1, 1.5, 2, 3];
         const panPositions = [-0.6, -0.2, 0.2, 0.6];
 
         for (let v = 0; v < droneCount; v++) {
             const drone = this.createDroneVoice(baseFreq * voiceRatios[v], panPositions[v]);
-            drones.push(drone);
+            if (drone) drones.push(drone);
         }
 
-        // Create resonant noise bed
         const noiseBed = this.createNoiseBed();
-
-        // Create shimmer layer (high harmonics with fast modulation)
         const shimmer = this.createShimmerLayer(baseFreq);
 
-        // Multi-rate LFO system
         const lfoSlow = this.ctx.createOscillator();
         lfoSlow.type = 'sine';
-        lfoSlow.frequency.value = 0.03; // ~33 second cycle
+        lfoSlow.frequency.value = AMBIENT_LFO_SLOW;
         lfoSlow.start();
 
         const lfoMedium = this.ctx.createOscillator();
         lfoMedium.type = 'sine';
-        lfoMedium.frequency.value = 0.12; // ~8 second cycle
+        lfoMedium.frequency.value = AMBIENT_LFO_MEDIUM;
         lfoMedium.start();
 
         this.nodes = {
@@ -642,15 +890,16 @@ export class AudioEngine {
             lfoSlow,
             lfoMedium,
             baseFreq
-        };
+        } as AmbientNodes;
 
         this.startAmbientLoop();
     }
 
-    createDroneVoice(freq, panPosition) {
-        // Each drone = 3 detuned sine oscillators for gentle beating
-        const oscs = [];
-        const detuneAmounts = [-3, 0, 3]; // Very subtle detune in cents
+    private createDroneVoice(freq: number, panPosition: number): DroneVoice | null {
+        if (!this.ctx || !this.filter) return null;
+
+        const oscs: DroneOsc[] = [];
+        const detuneAmounts = [-3, 0, 3];
 
         const voiceGain = this.ctx.createGain();
         voiceGain.gain.value = 0;
@@ -665,10 +914,10 @@ export class AudioEngine {
             const osc = this.ctx.createOscillator();
             const oscGain = this.ctx.createGain();
 
-            osc.type = 'sine'; // Pure sine for mellow sound
+            osc.type = 'sine';
             osc.frequency.value = freq;
             osc.detune.value = detuneAmounts[i];
-            oscGain.gain.value = 0.25; // Even, gentle levels
+            oscGain.gain.value = 0.25;
 
             osc.connect(oscGain);
             oscGain.connect(voiceGain);
@@ -683,42 +932,39 @@ export class AudioEngine {
             panner,
             baseFreq: freq,
             panBase: panPosition,
-            // Per-voice drift state
             detunePhase: Math.random() * Math.PI * 2,
             panPhase: Math.random() * Math.PI * 2
         };
     }
 
-    createNoiseBed() {
-        // Filtered noise for subtle texture (like distant wind or ocean)
+    private createNoiseBed(): NoiseBed | null {
+        if (!this.ctx || !this.filter) return null;
+
         const bufferSize = this.ctx.sampleRate * 2;
         const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
         const data = noiseBuffer.getChannelData(0);
 
-        // Very soft pink noise
         let b0 = 0, b1 = 0, b2 = 0;
         for (let i = 0; i < bufferSize; i++) {
             const white = Math.random() * 2 - 1;
             b0 = 0.99765 * b0 + white * 0.0990460;
             b1 = 0.96300 * b1 + white * 0.2965164;
             b2 = 0.57000 * b2 + white * 1.0526913;
-            data[i] = (b0 + b1 + b2) * 0.08; // Quieter base noise
+            data[i] = (b0 + b1 + b2) * 0.08;
         }
 
         const noiseSource = this.ctx.createBufferSource();
         noiseSource.buffer = noiseBuffer;
         noiseSource.loop = true;
 
-        // Gentle bandpass - low Q for smooth, non-resonant character
         const bandpass = this.ctx.createBiquadFilter();
         bandpass.type = 'bandpass';
         bandpass.frequency.value = 300;
-        bandpass.Q.value = 0.5; // Very low Q = smooth, not resonant
+        bandpass.Q.value = 0.5;
 
-        // Lowpass to remove harshness
         const lowpass = this.ctx.createBiquadFilter();
         lowpass.type = 'lowpass';
-        lowpass.frequency.value = 800; // Cut highs for warmth
+        lowpass.frequency.value = 800;
 
         const noiseGain = this.ctx.createGain();
         noiseGain.gain.value = 0;
@@ -743,10 +989,11 @@ export class AudioEngine {
         };
     }
 
-    createShimmerLayer(baseFreq) {
-        // Gentle high partials for subtle sparkle (not aggressive shimmer)
-        const partials = [];
-        const partialRatios = [3, 4, 5]; // Fewer, lower partials
+    private createShimmerLayer(baseFreq: number): ShimmerLayer | null {
+        if (!this.ctx || !this.filter) return null;
+
+        const partials: ShimmerPartial[] = [];
+        const partialRatios = [3, 4, 5];
 
         const shimmerGain = this.ctx.createGain();
         shimmerGain.gain.value = 0;
@@ -760,11 +1007,10 @@ export class AudioEngine {
 
             osc.type = 'sine';
             osc.frequency.value = baseFreq * partialRatios[i];
-            oscGain.gain.value = 0.015 / (i + 1); // Much quieter
+            oscGain.gain.value = 0.015 / (i + 1);
 
-            // Slow, gentle tremolo (more like slow breathing than shimmer)
             tremolo.type = 'sine';
-            tremolo.frequency.value = 0.3 + Math.random() * 0.5; // 0.3-0.8 Hz (very slow)
+            tremolo.frequency.value = 0.3 + Math.random() * 0.5;
             tremoloGain.gain.value = oscGain.gain.value * 0.3;
 
             tremolo.connect(tremoloGain);
@@ -788,66 +1034,69 @@ export class AudioEngine {
         return { partials, masterGain: shimmerGain };
     }
 
-    startAmbientLoop() {
+    private startAmbientLoop(): void {
+        if (!this.ctx || !this.masterGain) return;
+
         if (this.ambientInterval) clearInterval(this.ambientInterval);
 
         const now = this.ctx.currentTime;
+        const nodes = this.nodes as AmbientNodes;
 
-        // Fade in master (gentle level)
-        this.masterGain.gain.setTargetAtTime(0.5, now, 1.5);
+        this.masterGain.gain.setTargetAtTime(AMBIENT_MASTER_GAIN, now, 1.5);
 
-        // Fade in drone voices (very gentle levels)
-        this.nodes.drones.forEach((drone, i) => {
-            const level = i === 0 ? 0.10 : 0.06; // Much quieter
+        nodes.drones.forEach((drone, i) => {
+            const level = i === 0 ? 0.10 : 0.06;
             drone.voiceGain.gain.setTargetAtTime(level, now + i * 0.5, 1.2);
         });
 
-        // Fade in noise bed very subtly (barely perceptible)
-        this.nodes.noiseBed.gain.gain.setTargetAtTime(0.025, now + 1.0, 2.0);
+        if (nodes.noiseBed) {
+            nodes.noiseBed.gain.gain.setTargetAtTime(0.025, now + 1.0, 2.0);
+        }
 
-        // Fade in shimmer (very quiet)
-        this.nodes.shimmer.masterGain.gain.setTargetAtTime(0.04, now + 1.5, 2.0);
+        if (nodes.shimmer) {
+            nodes.shimmer.masterGain.gain.setTargetAtTime(0.04, now + 1.5, 2.0);
+        }
 
-        this.ambientState.isActive = true;
+        if (this.ambientState) {
+            this.ambientState.isActive = true;
+        }
         this.isPlaying = true;
 
-        // Main evolution loop - runs at 60fps equivalent
         this.ambientInterval = setInterval(() => {
             if (this.mode !== 'ambient' || !this.ctx) {
-                clearInterval(this.ambientInterval);
+                if (this.ambientInterval) clearInterval(this.ambientInterval);
                 return;
             }
             this.evolveAmbient();
-        }, 16);
+        }, AMBIENT_LOOP_INTERVAL);
     }
 
-    evolveAmbient() {
+    private evolveAmbient(): void {
+        if (!this.ctx || !this.ambientState) return;
+
         const now = this.ctx.currentTime;
         const state = this.ambientState;
-        const dt = 0.016; // ~60fps
+        const nodes = this.nodes as AmbientNodes;
+        const dt = 0.016;
 
-        // === MULTI-RATE PHASE UPDATES (slower for focus music) ===
-        state.microPhase += dt * 0.8;   // Gentle movement
-        state.mesoPhase += dt * 0.08;   // Slow breathing (~12 sec cycle)
-        state.macroPhase += dt * 0.008; // Very slow drift (~13 min cycle)
+        state.microPhase += dt * 0.8;
+        state.mesoPhase += dt * 0.08;
+        state.macroPhase += dt * 0.008;
 
-        // === RANDOM WALK (very gentle Brownian motion) ===
         state.walkVelX += (Math.random() - 0.5) * 0.0008;
         state.walkVelY += (Math.random() - 0.5) * 0.0008;
-        state.walkVelX *= 0.98; // Damping
+        state.walkVelX *= 0.98;
         state.walkVelY *= 0.98;
         state.walkX += state.walkVelX;
         state.walkY += state.walkVelY;
-        // Soft boundaries
+
         if (state.walkX < 0.1) state.walkVelX += 0.001;
         if (state.walkX > 0.9) state.walkVelX -= 0.001;
         if (state.walkY < 0.1) state.walkVelY += 0.001;
         if (state.walkY > 0.9) state.walkVelY -= 0.001;
-        state.walkX = Math.max(0, Math.min(1, state.walkX));
-        state.walkY = Math.max(0, Math.min(1, state.walkY));
+        state.walkX = clamp(state.walkX, 0, 1);
+        state.walkY = clamp(state.walkY, 0, 1);
 
-        // === BLEND INFLUENCES ===
-        // Combine random walk, sinusoidal drift, and touch target
         const macroInfluence = 0.3;
         const walkInfluence = 0.4;
         const touchInfluence = state.touchActive ? 0.5 : 0.1;
@@ -855,114 +1104,102 @@ export class AudioEngine {
         const macroDriftX = 0.5 + Math.sin(state.macroPhase) * 0.3;
         const macroDriftY = 0.5 + Math.cos(state.macroPhase * 0.7) * 0.3;
 
-        const blendedX = macroDriftX * macroInfluence +
-                         state.walkX * walkInfluence +
-                         state.targetX * touchInfluence;
-        const blendedY = macroDriftY * macroInfluence +
-                         state.walkY * walkInfluence +
-                         state.targetY * touchInfluence;
+        const blendedX = macroDriftX * macroInfluence + state.walkX * walkInfluence + state.targetX * touchInfluence;
+        const blendedY = macroDriftY * macroInfluence + state.walkY * walkInfluence + state.targetY * touchInfluence;
 
-        // Smooth interpolation
         state.x += (blendedX - state.x) * 0.02;
         state.y += (blendedY - state.y) * 0.02;
 
-        // === UPDATE DRONE VOICES ===
-        const baseFreq = 55 + state.x * 110; // 55-165 Hz range
+        const baseFreq = 55 + state.x * 110;
 
-        this.nodes.drones.forEach((drone, i) => {
-            // Per-drone phase for independent movement
+        nodes.drones.forEach((drone, i) => {
             drone.detunePhase += dt * (0.1 + i * 0.03);
             drone.panPhase += dt * (0.05 + i * 0.02);
 
-            // Frequency with gentle meso-rate breathing
-            const mesoMod = Math.sin(state.mesoPhase + i * 0.5) * 1; // Subtle pitch drift
-            const freqRatio = drone.baseFreq / this.nodes.baseFreq;
+            const mesoMod = Math.sin(state.mesoPhase + i * 0.5) * 1;
+            const freqRatio = drone.baseFreq / nodes.baseFreq;
             const newFreq = baseFreq * freqRatio;
 
             drone.oscs.forEach((o, j) => {
                 o.osc.frequency.setTargetAtTime(newFreq, now, 0.5);
-
-                // Very gentle detune variation
                 const detuneWander = Math.sin(drone.detunePhase + j * 2) * 1.5;
                 const targetDetune = o.baseDetune + detuneWander + mesoMod;
                 o.osc.detune.setTargetAtTime(targetDetune, now, 0.4);
             });
 
-            // Very subtle pan movement
             const panWander = Math.sin(drone.panPhase) * 0.08;
-            const newPan = Math.max(-1, Math.min(1, drone.panBase + panWander));
+            const newPan = clamp(drone.panBase + panWander, -1, 1);
             drone.panner.pan.setTargetAtTime(newPan, now, 0.5);
 
-            // Gentle level modulation (subtle breathing)
             const breatheMod = 0.92 + Math.sin(state.mesoPhase + i * 0.7) * 0.08;
-            const baseLevel = i === 0 ? 0.10 : 0.06; // Much quieter
+            const baseLevel = i === 0 ? 0.10 : 0.06;
             const yMod = i > 1 ? (1 - state.y * 0.2) : 1;
             drone.voiceGain.gain.setTargetAtTime(baseLevel * breatheMod * yMod, now, 0.3);
         });
 
-        // === UPDATE NOISE BED (very subtle, like distant air) ===
-        const noise = this.nodes.noiseBed;
-        noise.filterPhase += dt * 0.03; // Very slow sweep
+        if (nodes.noiseBed) {
+            const noise = nodes.noiseBed;
+            noise.filterPhase += dt * 0.03;
 
-        // Gentle bandpass sweep in low-mid range
-        const noiseCenter = 200 + state.y * 200 + Math.sin(noise.filterPhase) * 50;
-        noise.bandpass.frequency.setTargetAtTime(noiseCenter, now, 0.8);
-        noise.bandpass.Q.setTargetAtTime(0.5 + state.y * 0.5, now, 0.5); // Keep Q low
+            const noiseCenter = 200 + state.y * 200 + Math.sin(noise.filterPhase) * 50;
+            noise.bandpass.frequency.setTargetAtTime(noiseCenter, now, 0.8);
+            noise.bandpass.Q.setTargetAtTime(0.5 + state.y * 0.5, now, 0.5);
 
-        // Very subtle noise level
-        const noiseLevel = 0.015 + state.y * 0.025;
-        noise.gain.gain.setTargetAtTime(noiseLevel, now, 0.4);
+            const noiseLevel = 0.015 + state.y * 0.025;
+            noise.gain.gain.setTargetAtTime(noiseLevel, now, 0.4);
 
-        // Very subtle noise panning
-        const noisePan = Math.sin(noise.filterPhase * 0.2) * 0.2;
-        noise.panner.pan.setTargetAtTime(noisePan, now, 0.5);
+            const noisePan = Math.sin(noise.filterPhase * 0.2) * 0.2;
+            noise.panner.pan.setTargetAtTime(noisePan, now, 0.5);
+        }
 
-        // === UPDATE SHIMMER (very gentle high partials) ===
-        const shimmer = this.nodes.shimmer;
-        shimmer.partials.forEach((p, i) => {
-            const shimmerFreq = baseFreq * p.ratio;
-            p.osc.frequency.setTargetAtTime(shimmerFreq, now, 0.5);
+        if (nodes.shimmer) {
+            const shimmer = nodes.shimmer;
+            shimmer.partials.forEach((p, i) => {
+                const shimmerFreq = baseFreq * p.ratio;
+                p.osc.frequency.setTargetAtTime(shimmerFreq, now, 0.5);
 
-            // Very subtle shimmer intensity
-            const shimmerLevel = (0.008 + state.y * 0.015) / (i + 1);
-            p.gain.gain.setTargetAtTime(shimmerLevel, now, 0.5);
+                const shimmerLevel = (0.008 + state.y * 0.015) / (i + 1);
+                p.gain.gain.setTargetAtTime(shimmerLevel, now, 0.5);
 
-            // Slow tremolo variation
-            const tremoloRate = 0.3 + Math.sin(state.mesoPhase + i) * 0.2;
-            p.tremolo.frequency.setTargetAtTime(tremoloRate, now, 0.8);
-        });
+                const tremoloRate = 0.3 + Math.sin(state.mesoPhase + i) * 0.2;
+                p.tremolo.frequency.setTargetAtTime(tremoloRate, now, 0.8);
+            });
 
-        // Overall shimmer level (very quiet)
-        const shimmerMaster = 0.02 + state.y * 0.04;
-        shimmer.masterGain.gain.setTargetAtTime(shimmerMaster, now, 0.5);
+            const shimmerMaster = 0.02 + state.y * 0.04;
+            shimmer.masterGain.gain.setTargetAtTime(shimmerMaster, now, 0.5);
+        }
 
-        // === UPDATE HUD ===
         const noteName = this.getNoteName(Math.round(12 * Math.log2(baseFreq / 55)) + 9);
-        document.getElementById('val-freq').innerText = noteName + ' ' + Math.round(baseFreq) + 'Hz';
-
         const moodWord = state.y < 0.33 ? 'deep' : state.y < 0.66 ? 'calm' : 'airy';
-        document.getElementById('val-harm').innerText = moodWord + ' ' + (state.touchActive ? '◉' : '○');
+        this.updateHUD(noteName + ' ' + Math.round(baseFreq) + 'Hz', moodWord + ' ' + (state.touchActive ? '◉' : '○'));
     }
 
-    updateAmbient(x, y, duration = 0) {
-        const state = this.ambientState;
+    private updateAmbient(x: number, y: number, duration = 0): void {
+        if (!this.ambientState) return;
 
-        // Touch influence increases with duration
+        const state = this.ambientState;
         const influence = Math.min(1, 0.4 + duration * 0.4);
         state.targetX = state.targetX * (1 - influence) + x * influence;
         state.targetY = state.targetY * (1 - influence) + y * influence;
         state.touchActive = true;
 
-        // Clear touch active flag after a moment of no updates
-        clearTimeout(this.ambientTouchTimeout);
+        if (this.ambientTouchTimeout) clearTimeout(this.ambientTouchTimeout);
         this.ambientTouchTimeout = setTimeout(() => {
-            state.touchActive = false;
-        }, 200);
+            if (this.ambientState) this.ambientState.touchActive = false;
+        }, AMBIENT_TOUCH_TIMEOUT);
     }
 
-    // ========== COMMON METHODS ==========
-    updateHUDLabels() {
-        const labels = {
+    // ============ COMMON METHODS ============
+
+    private updateHUD(freq: string, harm: string): void {
+        const freqEl = document.getElementById('val-freq');
+        const harmEl = document.getElementById('val-harm');
+        if (freqEl) freqEl.innerText = freq;
+        if (harmEl) harmEl.innerText = harm;
+    }
+
+    private updateHUDLabels(): void {
+        const labels: Record<SynthesisMode, [string, string]> = {
             wavetable: ['X: Pitch | β: Cutoff', 'Y: Waveform | γ: Q'],
             theremin: ['X: Note | β: Cutoff', 'Y: Vibrato | γ: Q'],
             fm: ['X: Pitch | β: Cutoff', 'Y: Mod | γ: Q'],
@@ -972,30 +1209,24 @@ export class AudioEngine {
             ambient: ['X: Pitch drift | β: Cutoff', 'Y: Brightness | γ: Q']
         };
 
-        const l = labels[this.mode] || labels.wavetable;
-        document.getElementById('hud-bl').innerText = l[0];
-        document.getElementById('hud-br').innerText = l[1];
+        const l = labels[this.mode];
+        const blEl = document.getElementById('hud-bl');
+        const brEl = document.getElementById('hud-br');
+        if (blEl) blEl.innerText = l[0];
+        if (brEl) brEl.innerText = l[1];
     }
 
-    quantizeToScale(x, octaves = 3, baseFreq = 55) {
-        // Unquantized mode: continuous frequency
+    quantizeToScale(x: number, octaves = 3, baseFreq = 55): NoteInfo {
         if (!this.isQuantized) {
             const semitones = x * octaves * 12;
             const freq = baseFreq * Math.pow(2, semitones / 12);
             const nearestSemitone = Math.round(semitones);
             const noteName = this.getNoteName(this.tonic + nearestSemitone);
             const octave = Math.floor(nearestSemitone / 12) + 2;
-            return {
-                freq,
-                semitone: semitones,
-                noteName: noteName,
-                octave: octave,
-                isQuantized: false
-            };
+            return { freq, semitone: semitones, noteName, octave, isQuantized: false };
         }
 
-        // Quantized mode: snap to scale
-        const pattern = this.scalePatterns[this.scaleType] || this.scalePatterns.minor;
+        const pattern = SCALE_PATTERNS[this.scaleType] || SCALE_PATTERNS.minor;
         const notesPerOctave = pattern.length;
         const totalNotes = notesPerOctave * octaves;
 
@@ -1013,125 +1244,122 @@ export class AudioEngine {
         };
     }
 
-    setQuantized(enabled) {
+    setQuantized(enabled: boolean): void {
         this.isQuantized = enabled;
     }
 
-    getNoteName(semitone) {
-        const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-        return noteNames[semitone % 12];
+    getNoteName(semitone: number): string {
+        return NOTE_NAMES[semitone % 12];
     }
 
-    setTonic(tonic) {
-        this.tonic = parseInt(tonic);
+    setTonic(tonic: string | number): void {
+        this.tonic = typeof tonic === 'string' ? parseInt(tonic, 10) : tonic;
     }
 
-    setScaleType(scaleType) {
+    setScaleType(scaleType: string): void {
         this.scaleType = scaleType;
     }
 
-    resume() {
-        this.silentAudio.play().catch(() => {});
+    resume(): void {
+        this.silentAudio.play().catch(() => { /* ignore */ });
         if (this.ctx && this.ctx.state === 'suspended') {
             this.ctx.resume();
         }
     }
 
-    start(touchId = 0) {
+    start(_touchId: TouchId = 0): void {
         if (!this.ctx) this.init();
-        if (this.ctx.state === 'suspended') this.ctx.resume();
+        if (this.ctx!.state === 'suspended') this.ctx!.resume();
 
-        const now = this.ctx.currentTime;
+        const now = this.ctx!.currentTime;
 
         if (this.mode === 'ambient') {
             return;
-        } else if (['wavetable', 'theremin', 'fm', 'chords', 'karplus', 'granular'].includes(this.mode)) {
-            // Voices created on update
-        } else {
-            if (this.nodes.gain) this.nodes.gain.gain.setTargetAtTime(0.4, now, 0.05);
-            if (this.nodes.carrierGain) this.nodes.carrierGain.gain.setTargetAtTime(0.4, now, 0.05);
-            if (this.nodes.oscs) this.nodes.oscs.forEach(o => o.gain.gain.setTargetAtTime(0.2, now, 0.1));
         }
 
-        this.masterGain.gain.setTargetAtTime(0.7, now, 0.05);
+        if (this.masterGain) {
+            this.masterGain.gain.setTargetAtTime(MASTER_GAIN, now, 0.05);
+        }
         this.isPlaying = true;
     }
 
-    stop(touchId = 0, duration = 0) {
+    stop(touchId: TouchId = 0, duration = 0): void {
         if (!this.ctx) return;
         const now = this.ctx.currentTime;
 
         if (this.mode === 'ambient') return;
 
-        const releaseTime = 0.1 + Math.min(1.4, duration * 0.3);
+        const releaseTime = RELEASE_TIME_BASE + Math.min(RELEASE_TIME_MAX_ADDITION, duration * 0.3);
 
-        if (this.mode === 'wavetable') {
-            this.stopWavetableVoice(touchId, releaseTime);
-        } else if (this.mode === 'theremin') {
-            this.stopThereminVoice(touchId, releaseTime);
-        } else if (this.mode === 'fm') {
-            this.stopFMVoice(touchId, releaseTime);
-        } else if (this.mode === 'chords') {
-            this.stopChordVoice(touchId, releaseTime);
-        } else if (this.mode === 'karplus') {
-            if (this.nodes.voices) this.nodes.voices.delete(touchId);
-        } else if (this.mode === 'granular') {
-            this.stopGranularVoice(touchId, releaseTime);
+        switch (this.mode) {
+            case 'wavetable': this.stopWavetableVoice(touchId, releaseTime); break;
+            case 'theremin': this.stopThereminVoice(touchId, releaseTime); break;
+            case 'fm': this.stopFMVoice(touchId, releaseTime); break;
+            case 'chords': this.stopChordVoice(touchId, releaseTime); break;
+            case 'karplus':
+                const kNodes = this.nodes as KarplusNodes;
+                if (kNodes.voices) kNodes.voices.delete(touchId);
+                break;
+            case 'granular': this.stopGranularVoice(touchId, releaseTime); break;
         }
 
-        if (this.nodes.voices && this.nodes.voices.size === 0) {
+        if (this.getVoiceCount() === 0 && this.masterGain) {
             this.masterGain.gain.setTargetAtTime(0, now, releaseTime);
             this.isPlaying = false;
         }
     }
 
-    update(x, y, touchId = 0, duration = 0) {
+    update(x: number, y: number, touchId: TouchId = 0, duration = 0): void {
         if (!this.ctx) return;
 
-        switch(this.mode) {
-            case 'wavetable': this.updateWavetable(x, y, duration, touchId); break;
-            case 'theremin': this.updateTheremin(x, y, duration, touchId); break;
-            case 'fm': this.updateFM(x, y, duration, touchId); break;
-            case 'chords': this.updateChords(x, y, touchId, duration); break;
-            case 'karplus': this.updateKarplus(x, y, duration, touchId); break;
-            case 'granular': this.updateGranular(x, y, duration, touchId); break;
-            case 'ambient': this.updateAmbient(x, y, duration); break;
+        // Input validation - clamp coordinates to [0, 1]
+        const clampedX = clamp(x, 0, 1);
+        const clampedY = clamp(y, 0, 1);
+
+        switch (this.mode) {
+            case 'wavetable': this.updateWavetable(clampedX, clampedY, duration, touchId); break;
+            case 'theremin': this.updateTheremin(clampedX, clampedY, duration, touchId); break;
+            case 'fm': this.updateFM(clampedX, clampedY, duration, touchId); break;
+            case 'chords': this.updateChords(clampedX, clampedY, touchId, duration); break;
+            case 'karplus': this.updateKarplus(clampedX, clampedY, duration, touchId); break;
+            case 'granular': this.updateGranular(clampedX, clampedY, duration, touchId); break;
+            case 'ambient': this.updateAmbient(clampedX, clampedY, duration); break;
         }
     }
 
-    getAnalysis() {
+    getAnalysis(): Float32Array | null {
         if (this.analyser && this.dataArray) {
-            this.analyser.getFloatFrequencyData(this.dataArray);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            this.analyser.getFloatFrequencyData(this.dataArray as any);
             return this.dataArray;
         }
         return null;
     }
 
-    updateOrientation(beta, gamma) {
-        if (!this.ctx) return;
+    updateOrientation(beta: number | null, gamma: number | null): void {
+        if (!this.ctx || !this.filter) return;
         const now = this.ctx.currentTime;
 
-        const clampedBeta = Math.max(0, Math.min(90, beta || 0));
+        const clampedBeta = clamp(beta || 0, 0, 90);
         const filterMod = clampedBeta / 90;
         this.orientationParams.filterMod = filterMod;
 
-        // Logarithmic cutoff: more sensitive at low frequencies
-        // filterMod=0 (flat) -> 8000Hz, filterMod=1 (tilted) -> 80Hz
-        const tiltCutoff = 80 * Math.pow(100, 1 - filterMod);
+        const tiltCutoff = FILTER_MIN_FREQ * Math.pow(FILTER_MAX_FREQ / FILTER_MIN_FREQ, 1 - filterMod);
         this.filter.frequency.setTargetAtTime(tiltCutoff, now, 0.1);
 
-        const clampedGamma = Math.max(-45, Math.min(45, gamma || 0));
+        const clampedGamma = clamp(gamma || 0, -45, 45);
         const gammaNorm = Math.abs(clampedGamma) / 45;
         this.orientationParams.pan = gammaNorm;
 
-        const targetQ = 0.5 + (gammaNorm * 14.5);
+        const targetQ = FILTER_Q_MIN + (gammaNorm * (FILTER_Q_MAX - FILTER_Q_MIN));
         this.filter.Q.setTargetAtTime(targetQ, now, 0.1);
 
-        document.getElementById('val-tilt').innerText = `${Math.round(tiltCutoff)}Hz Q:${targetQ.toFixed(1)}`;
+        const tiltEl = document.getElementById('val-tilt');
+        if (tiltEl) tiltEl.innerText = `${Math.round(tiltCutoff)}Hz Q:${targetQ.toFixed(1)}`;
     }
 
-    updateMotion(acceleration, rotationRate) {
-        if (!this.ctx) return;
+    updateMotion(acceleration: DeviceMotionEventAcceleration | null, rotationRate: DeviceMotionEventRotationRate | null): void {
+        if (!this.ctx || !this.delayFeedback) return;
         const now = this.ctx.currentTime;
 
         if (rotationRate) {
@@ -1142,8 +1370,11 @@ export class AudioEngine {
             );
             this.orientationParams.lfoRate = rotMagnitude;
 
-            if (this.mode === 'fm' && this.nodes.ratio !== undefined) {
-                this.nodes.ratio = 1 + Math.floor(rotMagnitude / 30);
+            if (this.mode === 'fm') {
+                const fmNodes = this.nodes as FMNodes;
+                if (fmNodes.ratio !== undefined) {
+                    fmNodes.ratio = 1 + Math.floor(rotMagnitude / FM_ROTATION_THRESHOLD);
+                }
             }
         }
 
@@ -1155,17 +1386,19 @@ export class AudioEngine {
             );
             this.orientationParams.shake = accMagnitude;
 
-            if (accMagnitude > 5) {
-                this.delayFeedback.gain.setTargetAtTime(0.6, now, 0.02);
+            if (accMagnitude > SHAKE_ACCELERATION_THRESHOLD) {
+                this.delayFeedback.gain.setTargetAtTime(DELAY_FEEDBACK_SHAKE, now, 0.02);
                 setTimeout(() => {
-                    if (this.ctx) {
-                        this.delayFeedback.gain.setTargetAtTime(0.25, this.ctx.currentTime, 0.3);
+                    if (this.ctx && this.delayFeedback) {
+                        this.delayFeedback.gain.setTargetAtTime(DELAY_FEEDBACK_NORMAL, this.ctx.currentTime, 0.3);
                     }
-                }, 300);
+                }, SHAKE_DURATION_MS);
             }
 
-            const motionLabel = accMagnitude > 5 ? 'SHAKE!' : accMagnitude > 1.5 ? 'Active' : 'Steady';
-            document.getElementById('val-motion').innerText = motionLabel;
+            const motionLabel = accMagnitude > SHAKE_ACCELERATION_THRESHOLD ? 'SHAKE!' :
+                               accMagnitude > 1.5 ? 'Active' : 'Steady';
+            const motionEl = document.getElementById('val-motion');
+            if (motionEl) motionEl.innerText = motionLabel;
         }
     }
 }

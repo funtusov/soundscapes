@@ -5,6 +5,7 @@
 import { addRipple, setCursor, removeCursor, getCanvasSize } from './visualizer';
 import { LoopRecorder } from './LoopRecorder';
 import type { AudioEngine } from './AudioEngine';
+import { CONTROL_BAR_HEIGHT, clamp, type SynthesisMode } from './constants';
 
 interface TouchData {
     x: number;
@@ -66,22 +67,22 @@ export function initControls(audio: AudioEngine) {
 function handleStart(x: number, y: number, touchId: TouchId, audio: AudioEngine) {
     const { width, height } = getCanvasSize();
 
-    // Ignore touches in the control area (now 130px for all controls)
-    if (y > height - 130) return;
+    // Ignore touches in the control area
+    if (y > height - CONTROL_BAR_HEIGHT) return;
 
     setCursor(x, y, touchId);
 
     const normX = x / width;
-    const normY = 1 - (y / (height - 130));
+    const normY = clamp(1 - (y / (height - CONTROL_BAR_HEIGHT)), 0, 1);
 
     if (audio.ctx) {
-        (audio as any).start(touchId);
-        (audio as any).update(normX, Math.max(0, Math.min(1, normY)), touchId);
+        audio.start(touchId);
+        audio.update(normX, normY, touchId);
     }
 
     // Record event if loop recorder is recording
     if (loopRecorder && loopRecorder.isRecording) {
-        loopRecorder.recordEvent('start', normX, Math.max(0, Math.min(1, normY)), touchId);
+        loopRecorder.recordEvent('start', normX, normY, touchId);
     }
 
     activeTouches.set(touchId, { x, y, startTime: Date.now() });
@@ -96,17 +97,17 @@ function handleMove(x: number, y: number, touchId: TouchId, audio: AudioEngine) 
     setCursor(x, y, touchId);
 
     const normX = x / width;
-    const normY = 1 - (y / (height - 130));
+    const normY = clamp(1 - (y / (height - CONTROL_BAR_HEIGHT)), 0, 1);
 
     const touchData = activeTouches.get(touchId)!;
     const duration = (Date.now() - touchData.startTime) / 1000;
 
-    (audio as any).update(normX, Math.max(0, Math.min(1, normY)), touchId, duration);
+    audio.update(normX, normY, touchId, duration);
     activeTouches.set(touchId, { x, y, startTime: touchData.startTime });
 
     // Record event if loop recorder is recording
     if (loopRecorder && loopRecorder.isRecording) {
-        loopRecorder.recordEvent('move', normX, Math.max(0, Math.min(1, normY)), touchId);
+        loopRecorder.recordEvent('move', normX, normY, touchId);
     }
 
     if (Math.random() > 0.9) addRipple(x, y);
@@ -119,16 +120,16 @@ function handleEnd(touchId: TouchId, audio: AudioEngine) {
     const duration = (Date.now() - touchData.startTime) / 1000;
     const { width, height } = getCanvasSize();
     const normX = touchData.x / width;
-    const normY = 1 - (touchData.y / (height - 130));
+    const normY = clamp(1 - (touchData.y / (height - CONTROL_BAR_HEIGHT)), 0, 1);
 
     // Record event if loop recorder is recording
     if (loopRecorder && loopRecorder.isRecording) {
-        loopRecorder.recordEvent('end', normX, Math.max(0, Math.min(1, normY)), touchId);
+        loopRecorder.recordEvent('end', normX, normY, touchId);
     }
 
     activeTouches.delete(touchId);
     removeCursor(touchId);
-    (audio as any).stop(touchId, duration);
+    audio.stop(touchId, duration);
 }
 
 export function initModeSelector(audio: AudioEngine) {
@@ -139,7 +140,7 @@ export function initModeSelector(audio: AudioEngine) {
             e.preventDefault();
             buttons.forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            audio.initMode((btn as HTMLElement).dataset.mode!);
+            audio.initMode((btn as HTMLElement).dataset.mode as SynthesisMode);
         };
         btn.addEventListener('click', handler);
         btn.addEventListener('touchend', handler);
