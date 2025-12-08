@@ -2,30 +2,48 @@
  * VISUAL ENGINE - Canvas rendering and spectrogram
  */
 
+import type { AudioEngine } from './AudioEngine';
+
+type TouchId = number | string;
+
+interface CursorPos {
+    x: number;
+    y: number;
+}
+
+interface Ripple {
+    x: number;
+    y: number;
+    r: number;
+    o: number;
+}
+
 const SPECTROGRAM_HISTORY = 120;
 const MEL_BINS = 256;
 
-let canvas, ctx;
-let width, height;
-let cursors = new Map(); // Track multiple touch points
-let ripples = [];
-let spectrogramBuffer = [];
-let melFilterbank = null;
+let canvas: HTMLCanvasElement;
+let ctx: CanvasRenderingContext2D;
+let width = 0;
+let height = 0;
+const cursors = new Map<TouchId, CursorPos>();
+const ripples: Ripple[] = [];
+let spectrogramBuffer: Float32Array[] = [];
+let melFilterbank: Float32Array[] | null = null;
 
 // Mel scale helpers
-function hzToMel(hz) {
+function hzToMel(hz: number): number {
     return 2595 * Math.log10(1 + hz / 700);
 }
 
-function melToHz(mel) {
+function melToHz(mel: number): number {
     return 700 * (Math.pow(10, mel / 2595) - 1);
 }
 
-function createMelFilterbank(fftSize, sampleRate, numMelBins, minFreq, maxFreq) {
+function createMelFilterbank(fftSize: number, sampleRate: number, numMelBins: number, minFreq: number, maxFreq: number): Float32Array[] {
     const numFftBins = fftSize / 2;
     const melMin = hzToMel(minFreq);
     const melMax = hzToMel(maxFreq);
-    const melPoints = [];
+    const melPoints: number[] = [];
 
     for (let i = 0; i <= numMelBins + 1; i++) {
         melPoints.push(melToHz(melMin + (melMax - melMin) * i / (numMelBins + 1)));
@@ -33,7 +51,7 @@ function createMelFilterbank(fftSize, sampleRate, numMelBins, minFreq, maxFreq) 
 
     const binPoints = melPoints.map(freq => Math.floor((fftSize + 1) * freq / sampleRate));
 
-    const filterbank = [];
+    const filterbank: Float32Array[] = [];
     for (let i = 0; i < numMelBins; i++) {
         const filter = new Float32Array(numFftBins);
         const startBin = binPoints[i];
@@ -51,7 +69,7 @@ function createMelFilterbank(fftSize, sampleRate, numMelBins, minFreq, maxFreq) 
     return filterbank;
 }
 
-function fftToMel(fftData) {
+function fftToMel(fftData: Float32Array): Float32Array | null {
     if (!melFilterbank) return null;
     const melSpectrum = new Float32Array(MEL_BINS);
 
@@ -69,17 +87,17 @@ function fftToMel(fftData) {
     return melSpectrum;
 }
 
-export function initVisualizer(canvasElement) {
+export function initVisualizer(canvasElement: HTMLCanvasElement) {
     canvas = canvasElement;
-    ctx = canvas.getContext('2d');
+    ctx = canvas.getContext('2d')!;
     resize();
     window.addEventListener('resize', resize);
 }
 
-export function initMelFilterbank(audio) {
+export function initMelFilterbank(audio: AudioEngine) {
     if (audio.ctx) {
         melFilterbank = createMelFilterbank(
-            audio.analyser.fftSize,
+            audio.analyser!.fftSize,
             audio.ctx.sampleRate,
             MEL_BINS,
             20,
@@ -115,7 +133,7 @@ function drawGrid() {
     }
 }
 
-function drawSpectrogram(audio) {
+function drawSpectrogram(audio: AudioEngine) {
     const data = audio.getAnalysis();
     if (!data) return;
 
@@ -146,7 +164,7 @@ function drawSpectrogram(audio) {
             intensity = Math.max(0, Math.min(1, intensity));
             intensity = Math.pow(intensity, 0.8);
 
-            let r, g, b;
+            let r: number, g: number, b: number;
             if (intensity < 0.15) {
                 const t = intensity / 0.15;
                 r = 0; g = 0; b = Math.floor(80 * t);
@@ -180,7 +198,7 @@ function drawSpectrogram(audio) {
 function drawCursor() {
     if (cursors.size === 0) return;
 
-    for (const [touchId, pos] of cursors) {
+    for (const [, pos] of cursors) {
         const gradient = ctx.createRadialGradient(pos.x, pos.y, 5, pos.x, pos.y, 60);
         gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
         gradient.addColorStop(0.2, 'rgba(0, 255, 204, 0.8)');
@@ -212,15 +230,15 @@ function drawRipples() {
     }
 }
 
-export function addRipple(x, y) {
+export function addRipple(x: number, y: number) {
     ripples.push({ x, y, r: 10, o: 1.0 });
 }
 
-export function setCursor(x, y, touchId = 'mouse') {
+export function setCursor(x: number, y: number, touchId: TouchId = 'mouse') {
     cursors.set(touchId, { x, y });
 }
 
-export function removeCursor(touchId = 'mouse') {
+export function removeCursor(touchId: TouchId = 'mouse') {
     cursors.delete(touchId);
 }
 
@@ -263,7 +281,7 @@ function drawWaveformZones() {
     });
 }
 
-function drawSineWave(cx, cy, w, h) {
+function drawSineWave(cx: number, cy: number, w: number, h: number) {
     ctx.strokeStyle = 'rgba(100, 150, 255, 0.3)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -276,7 +294,7 @@ function drawSineWave(cx, cy, w, h) {
     ctx.stroke();
 }
 
-function drawTriWave(cx, cy, w, h) {
+function drawTriWave(cx: number, cy: number, w: number, h: number) {
     ctx.strokeStyle = 'rgba(100, 255, 200, 0.3)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -288,7 +306,7 @@ function drawTriWave(cx, cy, w, h) {
     ctx.stroke();
 }
 
-function drawSawWave(cx, cy, w, h) {
+function drawSawWave(cx: number, cy: number, w: number, h: number) {
     ctx.strokeStyle = 'rgba(255, 200, 100, 0.3)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -300,7 +318,7 @@ function drawSawWave(cx, cy, w, h) {
     ctx.stroke();
 }
 
-function drawSquareWave(cx, cy, w, h) {
+function drawSquareWave(cx: number, cy: number, w: number, h: number) {
     ctx.strokeStyle = 'rgba(255, 100, 100, 0.3)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -315,7 +333,7 @@ function drawSquareWave(cx, cy, w, h) {
     ctx.stroke();
 }
 
-export function animate(audio) {
+export function animate(audio: AudioEngine) {
     ctx.fillStyle = 'rgb(5, 5, 10)';
     ctx.fillRect(0, 0, width, height);
 

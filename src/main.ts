@@ -2,21 +2,21 @@
  * MAIN - Application entry point
  */
 
-import { AudioEngine } from './AudioEngine.js';
-import { initVisualizer, animate } from './visualizer.js';
-import { initControls, initModeSelector, initScaleControls, initLoopControls, initDeviceOrientation } from './controls.js';
+import { AudioEngine } from './AudioEngine';
+import { initVisualizer, animate } from './visualizer';
+import { initControls, initModeSelector, initScaleControls, initLoopControls, initDeviceOrientation } from './controls';
 
 // Initialize audio engine
 const audio = new AudioEngine();
 
 // DOM elements
-const overlay = document.getElementById('overlay');
-const startBtn = document.getElementById('startBtn');
-const canvas = document.getElementById('canvas');
+const overlay = document.getElementById('overlay')!;
+const startBtn = document.getElementById('startBtn')!;
+const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 
 let hasStarted = false;
 
-function initApp(e) {
+function initApp(e?: Event) {
     if (hasStarted) return;
     hasStarted = true;
 
@@ -32,9 +32,9 @@ function initApp(e) {
 
     // Hide overlay, show controls
     overlay.classList.add('hidden');
-    document.getElementById('modeSelector').style.display = 'flex';
-    document.getElementById('scaleControls').style.display = 'flex';
-    document.getElementById('loopControls').style.display = 'flex';
+    document.getElementById('modeSelector')!.style.display = 'flex';
+    document.getElementById('scaleControls')!.style.display = 'flex';
+    document.getElementById('loopControls')!.style.display = 'flex';
 
     // Initialize UI
     initModeSelector(audio);

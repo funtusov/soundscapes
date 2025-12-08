@@ -2,13 +2,22 @@
  * CONTROLS - Input handling (touch, mouse, device orientation)
  */
 
-import { addRipple, setCursor, removeCursor, getCanvasSize } from './visualizer.js';
-import { LoopRecorder } from './LoopRecorder.js';
+import { addRipple, setCursor, removeCursor, getCanvasSize } from './visualizer';
+import { LoopRecorder } from './LoopRecorder';
+import type { AudioEngine } from './AudioEngine';
 
-const activeTouches = new Map();
-let loopRecorder = null;
+interface TouchData {
+    x: number;
+    y: number;
+    startTime: number;
+}
 
-export function initControls(audio) {
+type TouchId = number | string;
+
+const activeTouches = new Map<TouchId, TouchData>();
+let loopRecorder: LoopRecorder | null = null;
+
+export function initControls(audio: AudioEngine) {
     // Mouse events
     window.addEventListener('mousedown', e => handleStart(e.clientX, e.clientY, 'mouse', audio));
     window.addEventListener('mousemove', e => {
@@ -18,41 +27,43 @@ export function initControls(audio) {
 
     // Touch events
     window.addEventListener('touchstart', e => {
-        if (e.target.closest('.mode-selector')) return;
-        if (e.target.closest('.scale-controls')) return;
-        if (e.target.closest('.loop-controls')) return;
+        const target = e.target as Element;
+        if (target.closest('.mode-selector')) return;
+        if (target.closest('.scale-controls')) return;
+        if (target.closest('.loop-controls')) return;
         e.preventDefault();
-        for (const touch of e.changedTouches) {
+        for (const touch of Array.from(e.changedTouches)) {
             handleStart(touch.clientX, touch.clientY, touch.identifier, audio);
         }
     }, { passive: false });
 
     window.addEventListener('touchmove', e => {
         e.preventDefault();
-        for (const touch of e.changedTouches) {
+        for (const touch of Array.from(e.changedTouches)) {
             handleMove(touch.clientX, touch.clientY, touch.identifier, audio);
         }
     }, { passive: false });
 
     window.addEventListener('touchend', e => {
-        if (e.target.closest('.mode-selector')) return;
-        if (e.target.closest('.scale-controls')) return;
-        if (e.target.closest('.loop-controls')) return;
+        const target = e.target as Element;
+        if (target.closest('.mode-selector')) return;
+        if (target.closest('.scale-controls')) return;
+        if (target.closest('.loop-controls')) return;
         e.preventDefault();
-        for (const touch of e.changedTouches) {
+        for (const touch of Array.from(e.changedTouches)) {
             handleEnd(touch.identifier, audio);
         }
     });
 
     window.addEventListener('touchcancel', e => {
         e.preventDefault();
-        for (const touch of e.changedTouches) {
+        for (const touch of Array.from(e.changedTouches)) {
             handleEnd(touch.identifier, audio);
         }
     });
 }
 
-function handleStart(x, y, touchId, audio) {
+function handleStart(x: number, y: number, touchId: TouchId, audio: AudioEngine) {
     const { width, height } = getCanvasSize();
 
     // Ignore touches in the control area (now 130px for all controls)
@@ -64,8 +75,8 @@ function handleStart(x, y, touchId, audio) {
     const normY = 1 - (y / (height - 130));
 
     if (audio.ctx) {
-        audio.start(touchId);
-        audio.update(normX, Math.max(0, Math.min(1, normY)), touchId);
+        (audio as any).start(touchId);
+        (audio as any).update(normX, Math.max(0, Math.min(1, normY)), touchId);
     }
 
     // Record event if loop recorder is recording
@@ -77,7 +88,7 @@ function handleStart(x, y, touchId, audio) {
     addRipple(x, y);
 }
 
-function handleMove(x, y, touchId, audio) {
+function handleMove(x: number, y: number, touchId: TouchId, audio: AudioEngine) {
     if (!activeTouches.has(touchId)) return;
 
     const { width, height } = getCanvasSize();
@@ -87,10 +98,10 @@ function handleMove(x, y, touchId, audio) {
     const normX = x / width;
     const normY = 1 - (y / (height - 130));
 
-    const touchData = activeTouches.get(touchId);
+    const touchData = activeTouches.get(touchId)!;
     const duration = (Date.now() - touchData.startTime) / 1000;
 
-    audio.update(normX, Math.max(0, Math.min(1, normY)), touchId, duration);
+    (audio as any).update(normX, Math.max(0, Math.min(1, normY)), touchId, duration);
     activeTouches.set(touchId, { x, y, startTime: touchData.startTime });
 
     // Record event if loop recorder is recording
@@ -101,7 +112,7 @@ function handleMove(x, y, touchId, audio) {
     if (Math.random() > 0.9) addRipple(x, y);
 }
 
-function handleEnd(touchId, audio) {
+function handleEnd(touchId: TouchId, audio: AudioEngine) {
     const touchData = activeTouches.get(touchId);
     if (!touchData) return;
 
@@ -117,32 +128,32 @@ function handleEnd(touchId, audio) {
 
     activeTouches.delete(touchId);
     removeCursor(touchId);
-    audio.stop(touchId, duration);
+    (audio as any).stop(touchId, duration);
 }
 
-export function initModeSelector(audio) {
+export function initModeSelector(audio: AudioEngine) {
     const buttons = document.querySelectorAll('.mode-btn');
     buttons.forEach(btn => {
-        const handler = (e) => {
+        const handler = (e: Event) => {
             e.stopPropagation();
             e.preventDefault();
             buttons.forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            audio.initMode(btn.dataset.mode);
+            audio.initMode((btn as HTMLElement).dataset.mode!);
         };
         btn.addEventListener('click', handler);
         btn.addEventListener('touchend', handler);
     });
 }
 
-export function initScaleControls(audio) {
-    const quantizeBtn = document.getElementById('quantizeBtn');
-    const scaleOptions = document.getElementById('scaleOptions');
-    const tonicSelect = document.getElementById('tonicSelect');
-    const scaleSelect = document.getElementById('scaleSelect');
+export function initScaleControls(audio: AudioEngine) {
+    const quantizeBtn = document.getElementById('quantizeBtn')!;
+    const scaleOptions = document.getElementById('scaleOptions')!;
+    const tonicSelect = document.getElementById('tonicSelect') as HTMLSelectElement;
+    const scaleSelect = document.getElementById('scaleSelect') as HTMLSelectElement;
 
     // Toggle quantization
-    const handleQuantizeToggle = (e) => {
+    const handleQuantizeToggle = (e: Event) => {
         e.stopPropagation();
         e.preventDefault();
 
@@ -156,40 +167,55 @@ export function initScaleControls(audio) {
     quantizeBtn.addEventListener('click', handleQuantizeToggle);
     quantizeBtn.addEventListener('touchend', handleQuantizeToggle);
 
-    tonicSelect.addEventListener('change', (e) => {
-        audio.setTonic(e.target.value);
+    tonicSelect.addEventListener('change', () => {
+        audio.setTonic(tonicSelect.value);
     });
 
-    scaleSelect.addEventListener('change', (e) => {
-        audio.setScaleType(e.target.value);
+    scaleSelect.addEventListener('change', () => {
+        audio.setScaleType(scaleSelect.value);
     });
 }
 
-export function initDeviceOrientation(audio) {
-    const needsOrientationPermission = typeof DeviceOrientationEvent !== 'undefined' &&
-        typeof DeviceOrientationEvent.requestPermission === 'function';
-    const needsMotionPermission = typeof DeviceMotionEvent !== 'undefined' &&
-        typeof DeviceMotionEvent.requestPermission === 'function';
+// Extend window for iOS device orientation/motion permissions
+declare global {
+    interface DeviceOrientationEvent {
+        requestPermission?: () => Promise<'granted' | 'denied'>;
+    }
+    interface DeviceMotionEvent {
+        requestPermission?: () => Promise<'granted' | 'denied'>;
+    }
+}
+
+export function initDeviceOrientation(audio: AudioEngine) {
+    const DeviceOrientationEventConstructor = DeviceOrientationEvent as unknown as {
+        requestPermission?: () => Promise<string>;
+    };
+    const DeviceMotionEventConstructor = DeviceMotionEvent as unknown as {
+        requestPermission?: () => Promise<string>;
+    };
+
+    const needsOrientationPermission = typeof DeviceOrientationEventConstructor.requestPermission === 'function';
+    const needsMotionPermission = typeof DeviceMotionEventConstructor.requestPermission === 'function';
 
     if (needsOrientationPermission || needsMotionPermission) {
-        const promises = [];
+        const promises: Promise<string>[] = [];
 
         if (needsOrientationPermission) {
             promises.push(
-                DeviceOrientationEvent.requestPermission()
+                DeviceOrientationEventConstructor.requestPermission!()
                     .then(state => {
                         if (state === 'granted') {
                             window.addEventListener('deviceorientation', e => audio.updateOrientation(e.beta, e.gamma), true);
                         }
                         return 'o:' + state;
                     })
-                    .catch(err => 'o:' + (err.name || err.message || 'err').substring(0, 15))
+                    .catch((err: Error) => 'o:' + (err.name || err.message || 'err').substring(0, 15))
             );
         }
 
         if (needsMotionPermission) {
             promises.push(
-                DeviceMotionEvent.requestPermission()
+                DeviceMotionEventConstructor.requestPermission!()
                     .then(state => {
                         if (state === 'granted') {
                             window.addEventListener('devicemotion', e => {
@@ -199,45 +225,41 @@ export function initDeviceOrientation(audio) {
                         }
                         return 'm:' + state;
                     })
-                    .catch(err => 'm:' + (err.name || err.message || 'err').substring(0, 15))
+                    .catch((err: Error) => 'm:' + (err.name || err.message || 'err').substring(0, 15))
             );
         }
 
         Promise.all(promises).then(results => {
-            document.getElementById('val-motion').innerText = results.join(' ');
+            document.getElementById('val-motion')!.innerText = results.join(' ');
         });
     } else {
-        if (typeof DeviceOrientationEvent !== 'undefined') {
-            window.addEventListener('deviceorientation', e => audio.updateOrientation(e.beta, e.gamma), true);
-        }
-        if (typeof DeviceMotionEvent !== 'undefined') {
-            window.addEventListener('devicemotion', e => {
-                const acc = e.acceleration || e.accelerationIncludingGravity;
-                audio.updateMotion(acc, e.rotationRate);
-            }, true);
-        }
-        document.getElementById('val-motion').innerText = 'auto';
+        window.addEventListener('deviceorientation', e => audio.updateOrientation(e.beta, e.gamma), true);
+        window.addEventListener('devicemotion', e => {
+            const acc = e.acceleration || e.accelerationIncludingGravity;
+            audio.updateMotion(acc, e.rotationRate);
+        }, true);
+        document.getElementById('val-motion')!.innerText = 'auto';
     }
 }
 
-export function initLoopControls(audio) {
+export function initLoopControls(audio: AudioEngine) {
     loopRecorder = new LoopRecorder(audio);
 
-    const recordBtn = document.getElementById('loopRecordBtn');
-    const playBtn = document.getElementById('loopPlayBtn');
-    const clearBtn = document.getElementById('loopClearBtn');
-    const statusEl = document.getElementById('loopStatus');
+    const recordBtn = document.getElementById('loopRecordBtn')!;
+    const playBtn = document.getElementById('loopPlayBtn') as HTMLButtonElement;
+    const clearBtn = document.getElementById('loopClearBtn') as HTMLButtonElement;
+    const statusEl = document.getElementById('loopStatus')!;
 
     // Update UI based on state changes
     loopRecorder.onStateChange = (state) => {
         // Update record button
         recordBtn.classList.toggle('recording', state.isRecording);
-        recordBtn.querySelector('.loop-icon').textContent = state.isRecording ? '■' : '●';
+        recordBtn.querySelector('.loop-icon')!.textContent = state.isRecording ? '■' : '●';
 
         // Update play button
         playBtn.disabled = !state.hasLoop;
         playBtn.classList.toggle('playing', state.isPlaying);
-        playBtn.querySelector('.loop-icon').textContent = state.isPlaying ? '■' : '▶';
+        playBtn.querySelector('.loop-icon')!.textContent = state.isPlaying ? '■' : '▶';
 
         // Update clear button
         clearBtn.disabled = !state.hasLoop && !state.isRecording;
@@ -255,42 +277,42 @@ export function initLoopControls(audio) {
     };
 
     // Record button handler
-    const handleRecord = (e) => {
+    const handleRecord = (e: Event) => {
         e.stopPropagation();
         e.preventDefault();
 
-        if (loopRecorder.isRecording) {
-            loopRecorder.stopRecording();
+        if (loopRecorder!.isRecording) {
+            loopRecorder!.stopRecording();
         } else {
             // Stop playback if playing, then start recording
-            if (loopRecorder.isPlaying) {
-                loopRecorder.stopPlayback();
+            if (loopRecorder!.isPlaying) {
+                loopRecorder!.stopPlayback();
             }
-            loopRecorder.startRecording();
+            loopRecorder!.startRecording();
         }
     };
     recordBtn.addEventListener('click', handleRecord);
     recordBtn.addEventListener('touchend', handleRecord);
 
     // Play button handler
-    const handlePlay = (e) => {
+    const handlePlay = (e: Event) => {
         e.stopPropagation();
         e.preventDefault();
 
-        if (loopRecorder.isPlaying) {
-            loopRecorder.stopPlayback();
+        if (loopRecorder!.isPlaying) {
+            loopRecorder!.stopPlayback();
         } else {
-            loopRecorder.startPlayback();
+            loopRecorder!.startPlayback();
         }
     };
     playBtn.addEventListener('click', handlePlay);
     playBtn.addEventListener('touchend', handlePlay);
 
     // Clear button handler
-    const handleClear = (e) => {
+    const handleClear = (e: Event) => {
         e.stopPropagation();
         e.preventDefault();
-        loopRecorder.clearLoop();
+        loopRecorder!.clearLoop();
     };
     clearBtn.addEventListener('click', handleClear);
     clearBtn.addEventListener('touchend', handleClear);

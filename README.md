@@ -54,11 +54,12 @@ Choose your musical scale using the dropdowns:
 
 ### Architecture
 ```
-js/
-├── main.js         # App initialization
-├── AudioEngine.js  # Web Audio synthesizer
-├── visualizer.js   # Canvas & mel spectrogram
-└── controls.js     # Touch/orientation handlers
+src/
+├── main.ts         # App initialization
+├── AudioEngine.ts  # Web Audio synthesizer
+├── visualizer.ts   # Canvas & mel spectrogram
+├── controls.ts     # Touch/orientation handlers
+└── LoopRecorder.ts # Loop recording/playback
 ```
 
 ### Audio Signal Chain
@@ -69,28 +70,32 @@ Oscillators → Lowpass Filter → Stereo Panner → Master Gain → Analyser �
 ```
 
 ### Technologies
+- **TypeScript** - Type-safe development
+- **Vite** - Fast build tooling
 - **Web Audio API** - Synthesis, filtering, effects
-- **ES6 Modules** - Clean code organization
 - **Canvas API** - Real-time spectrogram visualization
 - **DeviceOrientation API** - Tilt and motion controls
 - **Tailwind CSS** - UI styling
 
 ## Development
 
-No build process required.
-
 ```bash
-# Clone the repo
+# Clone and install
 git clone https://github.com/funtusov/soundscapes.git
 cd soundscapes
+npm install
 
-# Serve locally (any static server works)
-python -m http.server 8000
-# or
-npx serve
+# Development server (hot reload)
+npm run dev
 
-# Deploy to Netlify
-netlify deploy --prod
+# Type check
+npm run typecheck
+
+# Build for production
+npm run build
+
+# Build and deploy to Netlify
+npm run deploy
 ```
 
 ## Browser Support

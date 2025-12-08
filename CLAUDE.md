@@ -8,9 +8,13 @@ EtherPad Soundscape is an interactive audio-visual web application/instrument. U
 
 ## Development
 
-No build process required. To run:
-- Serve with any static file server (e.g., `python -m http.server`)
-- Or deploy to Netlify: `netlify deploy --prod`
+```bash
+npm install          # Install dependencies
+npm run dev          # Development server with hot reload
+npm run build        # Build for production
+npm run deploy       # Build and deploy to Netlify
+npm run typecheck    # Type check without emit
+```
 
 Live site: https://etherpad-soundscape.netlify.app
 
@@ -21,18 +25,22 @@ Live site: https://etherpad-soundscape.netlify.app
 ├── index.html          # Main HTML shell
 ├── css/
 │   └── styles.css      # All CSS styles
-├── js/
-│   ├── main.js         # Entry point, app initialization
-│   ├── AudioEngine.js  # Web Audio synthesizer (7 modes)
-│   ├── visualizer.js   # Canvas/mel spectrogram rendering
-│   └── controls.js     # Touch/mouse/orientation handlers
+├── src/
+│   ├── main.ts         # Entry point, app initialization
+│   ├── AudioEngine.ts  # Web Audio synthesizer (7 modes)
+│   ├── visualizer.ts   # Canvas/mel spectrogram rendering
+│   ├── controls.ts     # Touch/mouse/orientation handlers
+│   └── LoopRecorder.ts # Loop recording and playback
+├── vite.config.ts      # Vite build configuration
+├── tsconfig.json       # TypeScript configuration
+├── package.json        # Dependencies and scripts
 ├── CLAUDE.md           # This file
 └── .gitignore
 ```
 
 ## Architecture
 
-### AudioEngine (js/AudioEngine.js)
+### AudioEngine (src/AudioEngine.ts)
 Multi-mode Web Audio synthesizer with:
 - **7 synthesis modes**: Wavetable, Theremin, FM, Chords, Karplus-Strong, Granular, Ambient
 - **Multitouch polyphony**: Each finger creates an independent voice
@@ -41,21 +49,29 @@ Multi-mode Web Audio synthesizer with:
 - **Device orientation**: Beta controls filter cutoff, Gamma controls Q
 - **Shake detection**: Triggers delay feedback burst
 
-### Visualizer (js/visualizer.js)
+### Visualizer (src/visualizer.ts)
 - Real-time mel spectrogram (256 bins)
 - Colorful intensity gradient (black→blue→magenta→red→orange→yellow→white)
 - Grid overlay and cursor glow effects
 - Ripple animations on interaction
+- Mode-specific visual overlays (waveform zones in wavetable mode)
 
-### Controls (js/controls.js)
+### Controls (src/controls.ts)
 - Multi-touch support with touch duration tracking
 - Mouse fallback for desktop
 - iOS DeviceOrientation/DeviceMotion permission handling
 - Mode selector and scale control initialization
+- Loop recorder integration
+
+### LoopRecorder (src/LoopRecorder.ts)
+- Records touch events with timestamps
+- Plays back loops continuously
+- Supports layering live playing over loop playback
 
 ## Key Technical Details
 
-- Uses ES6 modules (`type="module"`)
+- **TypeScript** with Vite for fast builds
+- **ES modules** bundled for production
 - Tailwind CSS via CDN for overlay styling
 - Mobile-optimized with `touch-action: none`
 - iOS audio unlock via silent audio element

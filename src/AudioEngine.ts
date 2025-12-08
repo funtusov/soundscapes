@@ -1,48 +1,39 @@
 /**
  * AUDIO ENGINE - Multi-mode Synthesizer
  */
+// @ts-nocheck
+// TODO: Add proper TypeScript types incrementally
+
+type TouchId = number | string;
+
 export class AudioEngine {
+    ctx: AudioContext | null = null;
+    masterGain: GainNode | null = null;
+    filter: BiquadFilterNode | null = null;
+    panner: StereoPannerNode | null = null;
+    delayFeedback: GainNode | null = null;
+    analyser: AnalyserNode | null = null;
+    isPlaying = false;
+    dataArray: Float32Array | null = null;
+    mode = 'wavetable';
+    nodes: Record<string, any> = {};
+    touches = new Map<TouchId, any>();
+    orientationParams = { pan: 0, filterMod: 0, lfoRate: 0, shake: 0 };
+    isQuantized = false;
+    tonic = 9;
+    scaleType = 'minor';
+    scalePatterns: Record<string, number[]> = {
+        major: [0, 2, 4, 5, 7, 9, 11],
+        minor: [0, 2, 3, 5, 7, 8, 10],
+        pentatonic: [0, 2, 4, 7, 9],
+        chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    };
+    scale = [0, 3, 5, 7, 10, 12, 15, 17, 19, 22, 24];
+    silentAudio: HTMLAudioElement;
+    ambientState: any;
+    ambientInterval: any;
+    ambientTouchTimeout: any;
     constructor() {
-        this.ctx = null;
-        this.masterGain = null;
-        this.filter = null;
-        this.panner = null;
-        this.delayFeedback = null;
-        this.analyser = null;
-        this.isPlaying = false;
-        this.dataArray = null;
-
-        // Current synthesis mode
-        this.mode = 'wavetable';
-
-        // Mode-specific nodes
-        this.nodes = {};
-
-        // Multi-touch tracking
-        this.touches = new Map();
-
-        // Orientation parameters
-        this.orientationParams = {
-            pan: 0,
-            filterMod: 0,
-            lfoRate: 0,
-            shake: 0
-        };
-
-        // Scale quantization
-        this.isQuantized = false; // Start unquantized by default
-        this.tonic = 9; // A (0=C, 1=C#, ..., 9=A, ...)
-        this.scaleType = 'minor';
-        this.scalePatterns = {
-            major: [0, 2, 4, 5, 7, 9, 11],
-            minor: [0, 2, 3, 5, 7, 8, 10],
-            pentatonic: [0, 2, 4, 7, 9],
-            chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
-        };
-
-        // Legacy scale for backwards compat
-        this.scale = [0, 3, 5, 7, 10, 12, 15, 17, 19, 22, 24];
-
         // Silent audio for iOS
         this.silentAudio = new Audio("data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYNAAAAAAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYNAAAAAAAAAAAAAAAAAAAA");
         this.silentAudio.loop = true;

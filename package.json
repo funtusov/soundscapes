@@ -1,0 +1,28 @@
+{
+  "name": "etherpad-soundscape",
+  "version": "1.0.0",
+  "description": "An interactive audio-visual synthesizer instrument for touch devices.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "deploy": "npm run build && netlify deploy --prod --dir=dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/funtusov/soundscapes.git"
+  },
+  "keywords": ["synthesizer", "web-audio", "instrument", "multitouch"],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/funtusov/soundscapes/issues"
+  },
+  "homepage": "https://etherpad-soundscape.netlify.app",
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^7.2.7"
+  }
+}

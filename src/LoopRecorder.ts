@@ -2,21 +2,47 @@
  * LOOP RECORDER - Records and plays back touch/mouse interactions
  */
 
-export class LoopRecorder {
-    constructor(audio) {
-        this.audio = audio;
-        this.events = [];
-        this.isRecording = false;
-        this.isPlaying = false;
-        this.recordingStartTime = 0;
-        this.loopDuration = 0;
-        this.playbackStartTime = 0;
-        this.playbackInterval = null;
-        this.activePlaybackTouches = new Map(); // Track active touches during playback
-        this.touchIdOffset = 10000; // Offset for playback touch IDs to avoid conflicts
+import type { AudioEngine } from './AudioEngine';
 
-        // Callbacks for UI updates
-        this.onStateChange = null;
+type TouchId = number | string;
+
+interface LoopEvent {
+    type: 'start' | 'move' | 'end';
+    x: number;
+    y: number;
+    touchId: TouchId;
+    time: number;
+}
+
+interface PlaybackTouchData {
+    originalTouchId: TouchId;
+    startTime: number;
+}
+
+export interface LoopState {
+    isRecording: boolean;
+    isPlaying: boolean;
+    hasLoop: boolean;
+    duration: number;
+}
+
+export class LoopRecorder {
+    audio: AudioEngine;
+    events: LoopEvent[] = [];
+    isRecording = false;
+    isPlaying = false;
+    recordingStartTime = 0;
+    loopDuration = 0;
+    playbackStartTime = 0;
+    activePlaybackTouches = new Map<number, PlaybackTouchData>();
+    touchIdOffset = 10000;
+    playbackAnimationFrame: number | null = null;
+    lastLoopTime = 0;
+    lastLoopCount = 0;
+    onStateChange: ((state: LoopState) => void) | null = null;
+
+    constructor(audio: AudioEngine) {
+        this.audio = audio;
     }
 
     startRecording() {
@@ -34,7 +60,7 @@ export class LoopRecorder {
         this.loopDuration = performance.now() - this.recordingStartTime;
 
         // Close any still-active recorded touches with end events
-        const activeTouchIds = new Set();
+        const activeTouchIds = new Set<TouchId>();
         this.events.forEach(e => {
             if (e.type === 'start') activeTouchIds.add(e.touchId);
             if (e.type === 'end') activeTouchIds.delete(e.touchId);
@@ -57,7 +83,7 @@ export class LoopRecorder {
         this.notifyStateChange();
     }
 
-    recordEvent(type, x, y, touchId) {
+    recordEvent(type: 'start' | 'move' | 'end', x: number, y: number, touchId: TouchId) {
         if (!this.isRecording) return;
 
         const time = performance.now() - this.recordingStartTime;
@@ -99,7 +125,7 @@ export class LoopRecorder {
         // Look for events between prevLoopTime and loopTime (or from 0 if new loop)
         const startTime = loopCount > prevLoopCount ? 0 : prevLoopTime;
 
-        this.events.forEach((event, index) => {
+        this.events.forEach((event) => {
             if (event.time > startTime && event.time <= loopTime) {
                 this.executeEvent(event, loopCount);
             }
@@ -109,9 +135,9 @@ export class LoopRecorder {
         this.playbackAnimationFrame = requestAnimationFrame(() => this.schedulePlayback());
     }
 
-    executeEvent(event, loopCount) {
+    executeEvent(event: LoopEvent, loopCount: number) {
         // Create unique touch ID for this playback instance
-        const playbackTouchId = this.touchIdOffset + event.touchId + (loopCount * 1000);
+        const playbackTouchId = this.touchIdOffset + Number(event.touchId) + (loopCount * 1000);
 
         switch (event.type) {
             case 'start':
