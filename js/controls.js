@@ -2,9 +2,11 @@
  * CONTROLS - Input handling (touch, mouse, device orientation)
  */
 
-import { addRipple, setCursor, setTouching, getCanvasSize } from './visualizer.js';
+import { addRipple, setCursor, removeCursor, getCanvasSize } from './visualizer.js';
+import { LoopRecorder } from './LoopRecorder.js';
 
 const activeTouches = new Map();
+let loopRecorder = null;
 
 export function initControls(audio) {
     // Mouse events
@@ -18,6 +20,7 @@ export function initControls(audio) {
     window.addEventListener('touchstart', e => {
         if (e.target.closest('.mode-selector')) return;
         if (e.target.closest('.scale-controls')) return;
+        if (e.target.closest('.loop-controls')) return;
         e.preventDefault();
         for (const touch of e.changedTouches) {
             handleStart(touch.clientX, touch.clientY, touch.identifier, audio);
@@ -34,6 +37,7 @@ export function initControls(audio) {
     window.addEventListener('touchend', e => {
         if (e.target.closest('.mode-selector')) return;
         if (e.target.closest('.scale-controls')) return;
+        if (e.target.closest('.loop-controls')) return;
         e.preventDefault();
         for (const touch of e.changedTouches) {
             handleEnd(touch.identifier, audio);
@@ -51,18 +55,22 @@ export function initControls(audio) {
 function handleStart(x, y, touchId, audio) {
     const { width, height } = getCanvasSize();
 
-    // Ignore touches in the control area
-    if (y > height - 100) return;
+    // Ignore touches in the control area (now 130px for all controls)
+    if (y > height - 130) return;
 
-    setTouching(true);
-    setCursor(x, y, true);
+    setCursor(x, y, touchId);
 
     const normX = x / width;
-    const normY = 1 - (y / (height - 100));
+    const normY = 1 - (y / (height - 130));
 
     if (audio.ctx) {
         audio.start(touchId);
         audio.update(normX, Math.max(0, Math.min(1, normY)), touchId);
+    }
+
+    // Record event if loop recorder is recording
+    if (loopRecorder && loopRecorder.isRecording) {
+        loopRecorder.recordEvent('start', normX, Math.max(0, Math.min(1, normY)), touchId);
     }
 
     activeTouches.set(touchId, { x, y, startTime: Date.now() });
@@ -74,10 +82,10 @@ function handleMove(x, y, touchId, audio) {
 
     const { width, height } = getCanvasSize();
 
-    setCursor(x, y, true);
+    setCursor(x, y, touchId);
 
     const normX = x / width;
-    const normY = 1 - (y / (height - 100));
+    const normY = 1 - (y / (height - 130));
 
     const touchData = activeTouches.get(touchId);
     const duration = (Date.now() - touchData.startTime) / 1000;
@@ -85,19 +93,31 @@ function handleMove(x, y, touchId, audio) {
     audio.update(normX, Math.max(0, Math.min(1, normY)), touchId, duration);
     activeTouches.set(touchId, { x, y, startTime: touchData.startTime });
 
+    // Record event if loop recorder is recording
+    if (loopRecorder && loopRecorder.isRecording) {
+        loopRecorder.recordEvent('move', normX, Math.max(0, Math.min(1, normY)), touchId);
+    }
+
     if (Math.random() > 0.9) addRipple(x, y);
 }
 
 function handleEnd(touchId, audio) {
     const touchData = activeTouches.get(touchId);
-    const duration = touchData ? (Date.now() - touchData.startTime) / 1000 : 0;
+    if (!touchData) return;
+
+    const duration = (Date.now() - touchData.startTime) / 1000;
+    const { width, height } = getCanvasSize();
+    const normX = touchData.x / width;
+    const normY = 1 - (touchData.y / (height - 130));
+
+    // Record event if loop recorder is recording
+    if (loopRecorder && loopRecorder.isRecording) {
+        loopRecorder.recordEvent('end', normX, Math.max(0, Math.min(1, normY)), touchId);
+    }
 
     activeTouches.delete(touchId);
+    removeCursor(touchId);
     audio.stop(touchId, duration);
-
-    if (activeTouches.size === 0) {
-        setTouching(false);
-    }
 }
 
 export function initModeSelector(audio) {
@@ -116,8 +136,25 @@ export function initModeSelector(audio) {
 }
 
 export function initScaleControls(audio) {
+    const quantizeBtn = document.getElementById('quantizeBtn');
+    const scaleOptions = document.getElementById('scaleOptions');
     const tonicSelect = document.getElementById('tonicSelect');
     const scaleSelect = document.getElementById('scaleSelect');
+
+    // Toggle quantization
+    const handleQuantizeToggle = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+
+        const isQuantized = !audio.isQuantized;
+        audio.setQuantized(isQuantized);
+
+        quantizeBtn.classList.toggle('active', isQuantized);
+        scaleOptions.classList.toggle('visible', isQuantized);
+    };
+
+    quantizeBtn.addEventListener('click', handleQuantizeToggle);
+    quantizeBtn.addEventListener('touchend', handleQuantizeToggle);
 
     tonicSelect.addEventListener('change', (e) => {
         audio.setTonic(e.target.value);
@@ -181,4 +218,80 @@ export function initDeviceOrientation(audio) {
         }
         document.getElementById('val-motion').innerText = 'auto';
     }
+}
+
+export function initLoopControls(audio) {
+    loopRecorder = new LoopRecorder(audio);
+
+    const recordBtn = document.getElementById('loopRecordBtn');
+    const playBtn = document.getElementById('loopPlayBtn');
+    const clearBtn = document.getElementById('loopClearBtn');
+    const statusEl = document.getElementById('loopStatus');
+
+    // Update UI based on state changes
+    loopRecorder.onStateChange = (state) => {
+        // Update record button
+        recordBtn.classList.toggle('recording', state.isRecording);
+        recordBtn.querySelector('.loop-icon').textContent = state.isRecording ? '■' : '●';
+
+        // Update play button
+        playBtn.disabled = !state.hasLoop;
+        playBtn.classList.toggle('playing', state.isPlaying);
+        playBtn.querySelector('.loop-icon').textContent = state.isPlaying ? '■' : '▶';
+
+        // Update clear button
+        clearBtn.disabled = !state.hasLoop && !state.isRecording;
+
+        // Update status
+        if (state.isRecording) {
+            statusEl.textContent = 'REC';
+        } else if (state.isPlaying) {
+            statusEl.textContent = state.duration.toFixed(1) + 's';
+        } else if (state.hasLoop) {
+            statusEl.textContent = state.duration.toFixed(1) + 's';
+        } else {
+            statusEl.textContent = '--';
+        }
+    };
+
+    // Record button handler
+    const handleRecord = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+
+        if (loopRecorder.isRecording) {
+            loopRecorder.stopRecording();
+        } else {
+            // Stop playback if playing, then start recording
+            if (loopRecorder.isPlaying) {
+                loopRecorder.stopPlayback();
+            }
+            loopRecorder.startRecording();
+        }
+    };
+    recordBtn.addEventListener('click', handleRecord);
+    recordBtn.addEventListener('touchend', handleRecord);
+
+    // Play button handler
+    const handlePlay = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+
+        if (loopRecorder.isPlaying) {
+            loopRecorder.stopPlayback();
+        } else {
+            loopRecorder.startPlayback();
+        }
+    };
+    playBtn.addEventListener('click', handlePlay);
+    playBtn.addEventListener('touchend', handlePlay);
+
+    // Clear button handler
+    const handleClear = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        loopRecorder.clearLoop();
+    };
+    clearBtn.addEventListener('click', handleClear);
+    clearBtn.addEventListener('touchend', handleClear);
 }

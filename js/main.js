@@ -4,7 +4,7 @@
 
 import { AudioEngine } from './AudioEngine.js';
 import { initVisualizer, animate } from './visualizer.js';
-import { initControls, initModeSelector, initScaleControls, initDeviceOrientation } from './controls.js';
+import { initControls, initModeSelector, initScaleControls, initLoopControls, initDeviceOrientation } from './controls.js';
 
 // Initialize audio engine
 const audio = new AudioEngine();
@@ -34,10 +34,12 @@ function initApp(e) {
     overlay.classList.add('hidden');
     document.getElementById('modeSelector').style.display = 'flex';
     document.getElementById('scaleControls').style.display = 'flex';
+    document.getElementById('loopControls').style.display = 'flex';
 
     // Initialize UI
     initModeSelector(audio);
     initScaleControls(audio);
+    initLoopControls(audio);
     initControls(audio);
 
     // Initialize visualizer

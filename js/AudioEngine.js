@@ -30,6 +30,7 @@ export class AudioEngine {
         };
 
         // Scale quantization
+        this.isQuantized = false; // Start unquantized by default
         this.tonic = 9; // A (0=C, 1=C#, ..., 9=A, ...)
         this.scaleType = 'minor';
         this.scalePatterns = {
@@ -240,8 +241,8 @@ export class AudioEngine {
         const voice = this.nodes.voices.get(touchId);
         const note = this.quantizeToScale(x, 3, 55);
 
-        voice.osc.frequency.setTargetAtTime(note.freq, now, 0.02);
-        voice.gain.gain.setTargetAtTime(0.3, now, 0.02);
+        voice.osc.frequency.setTargetAtTime(note.freq, now, 0.005);
+        voice.gain.gain.setTargetAtTime(0.3, now, 0.005);
 
         if (y < 0.25) voice.osc.type = 'sine';
         else if (y < 0.5) voice.osc.type = 'triangle';
@@ -986,6 +987,23 @@ export class AudioEngine {
     }
 
     quantizeToScale(x, octaves = 3, baseFreq = 55) {
+        // Unquantized mode: continuous frequency
+        if (!this.isQuantized) {
+            const semitones = x * octaves * 12;
+            const freq = baseFreq * Math.pow(2, semitones / 12);
+            const nearestSemitone = Math.round(semitones);
+            const noteName = this.getNoteName(this.tonic + nearestSemitone);
+            const octave = Math.floor(nearestSemitone / 12) + 2;
+            return {
+                freq,
+                semitone: semitones,
+                noteName: noteName,
+                octave: octave,
+                isQuantized: false
+            };
+        }
+
+        // Quantized mode: snap to scale
         const pattern = this.scalePatterns[this.scaleType] || this.scalePatterns.minor;
         const notesPerOctave = pattern.length;
         const totalNotes = notesPerOctave * octaves;
@@ -999,8 +1017,13 @@ export class AudioEngine {
             freq: baseFreq * Math.pow(2, (pattern[degree] + octave * 12) / 12),
             semitone: pattern[degree] + octave * 12,
             noteName: this.getNoteName(semitone),
-            octave: octave + 2
+            octave: octave + 2,
+            isQuantized: true
         };
+    }
+
+    setQuantized(enabled) {
+        this.isQuantized = enabled;
     }
 
     getNoteName(semitone) {

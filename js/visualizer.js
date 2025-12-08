@@ -7,8 +7,7 @@ const MEL_BINS = 256;
 
 let canvas, ctx;
 let width, height;
-let cursorX = 0, cursorY = 0;
-let isTouching = false;
+let cursors = new Map(); // Track multiple touch points
 let ripples = [];
 let spectrogramBuffer = [];
 let melFilterbank = null;
@@ -179,22 +178,24 @@ function drawSpectrogram(audio) {
 }
 
 function drawCursor() {
-    if (!isTouching) return;
+    if (cursors.size === 0) return;
 
-    const gradient = ctx.createRadialGradient(cursorX, cursorY, 5, cursorX, cursorY, 60);
-    gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
-    gradient.addColorStop(0.2, 'rgba(0, 255, 204, 0.8)');
-    gradient.addColorStop(1, 'rgba(0, 255, 204, 0)');
+    for (const [touchId, pos] of cursors) {
+        const gradient = ctx.createRadialGradient(pos.x, pos.y, 5, pos.x, pos.y, 60);
+        gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+        gradient.addColorStop(0.2, 'rgba(0, 255, 204, 0.8)');
+        gradient.addColorStop(1, 'rgba(0, 255, 204, 0)');
 
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(cursorX, cursorY, 60, 0, Math.PI * 2);
-    ctx.fill();
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 60, 0, Math.PI * 2);
+        ctx.fill();
 
-    ctx.fillStyle = '#fff';
-    ctx.beginPath();
-    ctx.arc(cursorX, cursorY, 5, 0, Math.PI * 2);
-    ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+    }
 }
 
 function drawRipples() {
@@ -215,14 +216,103 @@ export function addRipple(x, y) {
     ripples.push({ x, y, r: 10, o: 1.0 });
 }
 
-export function setCursor(x, y, touching) {
-    cursorX = x;
-    cursorY = y;
-    isTouching = touching;
+export function setCursor(x, y, touchId = 'mouse') {
+    cursors.set(touchId, { x, y });
 }
 
-export function setTouching(touching) {
-    isTouching = touching;
+export function removeCursor(touchId = 'mouse') {
+    cursors.delete(touchId);
+}
+
+function drawWaveformZones() {
+    const controlHeight = 130;
+    const playableHeight = height - controlHeight;
+    const zoneHeight = playableHeight / 4;
+
+    // Zone colors (very subtle)
+    const zones = [
+        { name: 'SQUARE', color: 'rgba(255, 100, 100, 0.06)', drawWave: drawSquareWave },
+        { name: 'SAW', color: 'rgba(255, 200, 100, 0.06)', drawWave: drawSawWave },
+        { name: 'TRI', color: 'rgba(100, 255, 200, 0.06)', drawWave: drawTriWave },
+        { name: 'SINE', color: 'rgba(100, 150, 255, 0.06)', drawWave: drawSineWave }
+    ];
+
+    zones.forEach((zone, i) => {
+        const y = i * zoneHeight;
+
+        // Background tint
+        ctx.fillStyle = zone.color;
+        ctx.fillRect(0, y, width, zoneHeight);
+
+        // Subtle divider line
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, y + zoneHeight);
+        ctx.lineTo(width, y + zoneHeight);
+        ctx.stroke();
+
+        // Draw waveform icon on the right
+        zone.drawWave(width - 60, y + zoneHeight / 2, 40, 15);
+
+        // Zone label
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.font = '10px Courier New';
+        ctx.textAlign = 'right';
+        ctx.fillText(zone.name, width - 15, y + zoneHeight / 2 + 25);
+    });
+}
+
+function drawSineWave(cx, cy, w, h) {
+    ctx.strokeStyle = 'rgba(100, 150, 255, 0.3)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i <= w; i++) {
+        const x = cx - w/2 + i;
+        const y = cy + Math.sin((i / w) * Math.PI * 2) * h/2;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+}
+
+function drawTriWave(cx, cy, w, h) {
+    ctx.strokeStyle = 'rgba(100, 255, 200, 0.3)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx - w/2, cy);
+    ctx.lineTo(cx - w/4, cy - h/2);
+    ctx.lineTo(cx, cy);
+    ctx.lineTo(cx + w/4, cy + h/2);
+    ctx.lineTo(cx + w/2, cy);
+    ctx.stroke();
+}
+
+function drawSawWave(cx, cy, w, h) {
+    ctx.strokeStyle = 'rgba(255, 200, 100, 0.3)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx - w/2, cy + h/2);
+    ctx.lineTo(cx - w/2, cy - h/2);
+    ctx.lineTo(cx, cy + h/2);
+    ctx.lineTo(cx, cy - h/2);
+    ctx.lineTo(cx + w/2, cy + h/2);
+    ctx.stroke();
+}
+
+function drawSquareWave(cx, cy, w, h) {
+    ctx.strokeStyle = 'rgba(255, 100, 100, 0.3)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx - w/2, cy + h/2);
+    ctx.lineTo(cx - w/2, cy - h/2);
+    ctx.lineTo(cx - w/4, cy - h/2);
+    ctx.lineTo(cx - w/4, cy + h/2);
+    ctx.lineTo(cx + w/4, cy + h/2);
+    ctx.lineTo(cx + w/4, cy - h/2);
+    ctx.lineTo(cx + w/2, cy - h/2);
+    ctx.lineTo(cx + w/2, cy + h/2);
+    ctx.stroke();
 }
 
 export function animate(audio) {
@@ -230,11 +320,17 @@ export function animate(audio) {
     ctx.fillRect(0, 0, width, height);
 
     drawSpectrogram(audio);
+
+    // Draw mode-specific overlays (after spectrogram so they're visible)
+    if (audio.mode === 'wavetable') {
+        drawWaveformZones();
+    }
+
     drawGrid();
     drawRipples();
     drawCursor();
 
-    if (!isTouching && Math.random() > 0.95) {
+    if (cursors.size === 0 && Math.random() > 0.95) {
         ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
         ctx.beginPath();
         ctx.arc(Math.random() * width, Math.random() * height, Math.random() * 2, 0, Math.PI * 2);
