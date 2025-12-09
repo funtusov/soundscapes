@@ -316,40 +316,49 @@ export function removeCursor(touchId: TouchId = 'mouse') {
 
 function drawWaveformZones() {
     const playableHeight = height - CONTROL_BAR_HEIGHT;
-    const zoneHeight = playableHeight / 4;
 
-    // Zone colors (very subtle)
-    const zones = [
-        { name: 'SQUARE', color: 'rgba(255, 100, 100, 0.06)', drawWave: drawSquareWave },
-        { name: 'SAW', color: 'rgba(255, 200, 100, 0.06)', drawWave: drawSawWave },
-        { name: 'TRI', color: 'rgba(100, 255, 200, 0.06)', drawWave: drawTriWave },
-        { name: 'SINE', color: 'rgba(100, 150, 255, 0.06)', drawWave: drawSineWave }
+    // Draw gradient background (morphing from sine to square)
+    const gradient = ctx.createLinearGradient(0, 0, 0, playableHeight);
+    gradient.addColorStop(0, 'rgba(255, 100, 100, 0.04)');    // Square (top/high Y)
+    gradient.addColorStop(0.33, 'rgba(255, 200, 100, 0.04)'); // Saw
+    gradient.addColorStop(0.67, 'rgba(100, 255, 200, 0.04)'); // Triangle
+    gradient.addColorStop(1, 'rgba(100, 150, 255, 0.04)');    // Sine (bottom/low Y)
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, playableHeight);
+
+    // Waveform markers at morph positions (not zones, just reference points)
+    const waveforms = [
+        { name: 'SQUARE', y: 0, drawWave: drawSquareWave, color: 'rgba(255, 100, 100, 0.3)' },
+        { name: 'SAW', y: playableHeight / 3, drawWave: drawSawWave, color: 'rgba(255, 200, 100, 0.3)' },
+        { name: 'TRI', y: (playableHeight * 2) / 3, drawWave: drawTriWave, color: 'rgba(100, 255, 200, 0.3)' },
+        { name: 'SINE', y: playableHeight, drawWave: drawSineWave, color: 'rgba(100, 150, 255, 0.3)' }
     ];
 
-    zones.forEach((zone, i) => {
-        const y = i * zoneHeight;
+    waveforms.forEach((wf) => {
+        // Draw waveform icon on the right edge
+        const yPos = Math.min(playableHeight - 20, Math.max(20, wf.y));
+        wf.drawWave(width - 60, yPos, 40, 15);
 
-        // Background tint
-        ctx.fillStyle = zone.color;
-        ctx.fillRect(0, y, width, zoneHeight);
-
-        // Subtle divider line
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(0, y + zoneHeight);
-        ctx.lineTo(width, y + zoneHeight);
-        ctx.stroke();
-
-        // Draw waveform icon on the right
-        zone.drawWave(width - 60, y + zoneHeight / 2, 40, 15);
-
-        // Zone label
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-        ctx.font = '10px Courier New';
+        // Small label
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+        ctx.font = '9px Courier New';
         ctx.textAlign = 'right';
-        ctx.fillText(zone.name, width - 15, y + zoneHeight / 2 + 25);
+        ctx.fillText(wf.name, width - 15, yPos + 4);
     });
+
+    // Draw morph arrows between waveforms
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    for (let i = 0; i < waveforms.length - 1; i++) {
+        const y1 = waveforms[i].y;
+        const y2 = waveforms[i + 1].y;
+        ctx.beginPath();
+        ctx.moveTo(width - 40, Math.max(25, y1 + 15));
+        ctx.lineTo(width - 40, Math.min(playableHeight - 25, y2 - 15));
+        ctx.stroke();
+    }
+    ctx.setLineDash([]);
 }
 
 function drawSineWave(cx: number, cy: number, w: number, h: number) {
