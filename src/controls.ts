@@ -75,6 +75,7 @@ export function initControls(audio: AudioEngine) {
         if (target.closest('.mode-selector')) return;
         if (target.closest('.scale-controls')) return;
         if (target.closest('.loop-controls')) return;
+        if (target.closest('.texture-controls')) return;
         e.preventDefault();
         for (const touch of Array.from(e.changedTouches)) {
             handleStart(touch.clientX, touch.clientY, touch.identifier, audio);
@@ -93,6 +94,7 @@ export function initControls(audio: AudioEngine) {
         if (target.closest('.mode-selector')) return;
         if (target.closest('.scale-controls')) return;
         if (target.closest('.loop-controls')) return;
+        if (target.closest('.texture-controls')) return;
         e.preventDefault();
         for (const touch of Array.from(e.changedTouches)) {
             handleEnd(touch.identifier, audio);
@@ -300,10 +302,23 @@ export function initDeviceOrientation(audio: AudioEngine) {
 export function initLoopControls(audio: AudioEngine) {
     loopRecorder = new LoopRecorder(audio);
 
+    const loopControls = document.getElementById('loopControls')!;
+    const loopToggleBtn = document.getElementById('loopToggleBtn')!;
     const recordBtn = document.getElementById('loopRecordBtn')!;
     const playBtn = document.getElementById('loopPlayBtn') as HTMLButtonElement;
     const clearBtn = document.getElementById('loopClearBtn') as HTMLButtonElement;
     const statusEl = document.getElementById('loopStatus')!;
+
+    // Toggle loop controls visibility
+    const handleLoopToggle = (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const isExpanded = loopControls.classList.toggle('expanded');
+        loopToggleBtn.classList.toggle('active', isExpanded);
+    };
+
+    loopToggleBtn.addEventListener('click', handleLoopToggle);
+    loopToggleBtn.addEventListener('touchend', handleLoopToggle);
 
     // Update UI based on state changes
     loopRecorder.onStateChange = (state) => {
@@ -427,9 +442,9 @@ export function initTextureControls(audio: AudioEngine) {
         noiseBtn.classList.toggle('active', isActive);
     };
 
-    // Show texture controls for focus and relaxation modes
+    // Show texture controls for focus, relaxation, and wavetable modes
     const updateVisibility = () => {
-        const showTextures = audio.mode === 'focus' || audio.mode === 'relaxation';
+        const showTextures = audio.mode === 'focus' || audio.mode === 'relaxation' || audio.mode === 'wavetable';
         textureControls.style.display = showTextures ? 'flex' : 'none';
     };
 

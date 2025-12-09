@@ -37,9 +37,8 @@ function initApp(e?: Event) {
     overlay.classList.add('hidden');
     document.getElementById('modeSelector')!.style.display = 'flex';
     document.getElementById('scaleControls')!.style.display = 'flex';
-    document.getElementById('loopControls')!.style.display = 'flex';
-    document.getElementById('effectsControls')!.style.display = 'flex';
-    document.getElementById('textureControls')!.style.display = (audio.mode === 'focus' || audio.mode === 'relaxation') ? 'flex' : 'none';
+    // Loop controls start hidden (toggle via button)
+    document.getElementById('textureControls')!.style.display = (audio.mode === 'focus' || audio.mode === 'relaxation' || audio.mode === 'wavetable') ? 'flex' : 'none';
 
     // Initialize UI
     initModeSelector(audio);

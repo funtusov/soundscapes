@@ -13,7 +13,7 @@ body, html {
 canvas {
     display: block;
     width: 100%;
-    height: 100%;
+    height: calc(100% - 90px);
 }
 
 /* Start overlay */
@@ -72,23 +72,35 @@ canvas {
 
 .hud-tl { top: 10px; left: 10px; }
 .hud-tr { top: 10px; right: 10px; text-align: right; }
-.hud-bl { bottom: 130px; left: 10px; }
-.hud-br { bottom: 130px; right: 10px; text-align: right; }
+.hud-bl { bottom: 95px; left: 10px; }
+.hud-br { bottom: 95px; right: 10px; text-align: right; }
 
-/* Mode selector */
+/* Control bar container */
+.control-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(5, 5, 5, 1);
+    border-top: 1px solid rgba(0, 255, 204, 0.2);
+    z-index: 15;
+}
+
+/* Mode selector - main bottom row */
 .mode-selector {
     position: absolute;
     bottom: 0;
     left: 0;
     right: 0;
-    height: 50px;
+    height: 44px;
     display: flex;
     justify-content: center;
     align-items: center;
-    gap: 10px;
-    background: rgba(0, 0, 0, 0.8);
-    border-top: 1px solid rgba(0, 255, 204, 0.3);
+    gap: 8px;
+    background: rgba(5, 5, 5, 1);
+    border-top: 1px solid rgba(0, 255, 204, 0.2);
     z-index: 15;
+    padding: 0 10px;
 }
 
 .mode-label {
@@ -129,18 +141,18 @@ canvas {
     padding: 8px;
 }
 
-/* Scale controls */
+/* Scale controls - secondary row */
 .scale-controls {
     position: absolute;
-    bottom: 86px;
+    bottom: 44px;
     left: 0;
     right: 0;
     height: 40px;
     display: flex;
     justify-content: center;
     align-items: center;
-    gap: 10px;
-    background: rgba(0, 0, 0, 0.6);
+    gap: 8px;
+    background: rgba(5, 5, 5, 0.95);
     z-index: 15;
 }
 
@@ -195,19 +207,51 @@ canvas {
     display: flex;
 }
 
-/* Loop controls */
+/* Loop controls - collapsible */
 .loop-controls {
     position: absolute;
-    bottom: 50px;
+    bottom: 44px;
     left: 0;
     right: 0;
     height: 36px;
-    display: flex;
+    display: none;
     justify-content: center;
     align-items: center;
     gap: 8px;
-    background: rgba(0, 0, 0, 0.6);
-    z-index: 15;
+    background: rgba(5, 5, 5, 0.95);
+    z-index: 14;
+}
+
+.loop-controls.expanded {
+    display: flex;
+}
+
+/* Loop toggle button in main bar */
+.loop-toggle-btn {
+    width: 32px;
+    height: 32px;
+    border: 1px solid rgba(255, 100, 100, 0.4);
+    background: transparent;
+    color: rgba(255, 100, 100, 0.6);
+    font-size: 0.75rem;
+    font-family: 'Courier New', monospace;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.loop-toggle-btn:hover {
+    border-color: rgba(255, 100, 100, 0.7);
+    color: rgba(255, 100, 100, 0.8);
+}
+
+.loop-toggle-btn.active {
+    border-color: #ff6464;
+    color: #ff6464;
+    background: rgba(255, 100, 100, 0.15);
 }
 
 .loop-btn {
@@ -273,16 +317,9 @@ canvas {
     50% { box-shadow: 0 0 15px rgba(255, 51, 51, 0.8); }
 }
 
-/* Effects controls */
+/* Effects controls - now inline in main bar */
 .effects-controls {
-    position: absolute;
-    bottom: 50px;
-    right: 10px;
-    height: 36px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    z-index: 16;
+    display: none; /* Moved to main bar */
 }
 
 .effect-btn {
@@ -309,16 +346,19 @@ canvas {
     box-shadow: 0 0 8px rgba(150, 100, 255, 0.4);
 }
 
-/* Texture controls (vinyl, tape hiss) */
+/* Texture controls (vinyl, tape hiss) - secondary bar */
 .texture-controls {
     position: absolute;
-    bottom: 50px;
-    left: 10px;
-    height: 36px;
+    bottom: 44px;
+    left: 0;
+    right: 0;
+    height: 40px;
     display: flex;
+    justify-content: center;
     align-items: center;
-    gap: 8px;
-    z-index: 16;
+    gap: 10px;
+    background: rgba(5, 5, 5, 0.95);
+    z-index: 15;
 }
 
 .texture-btn {

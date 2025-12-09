@@ -25,7 +25,7 @@ export const SPECTROGRAM_MAX_VAL = -20;
 // ============ UI CONSTANTS ============
 
 /** Height of the control bar at bottom of screen */
-export const CONTROL_BAR_HEIGHT = 130;
+export const CONTROL_BAR_HEIGHT = 90;
 
 /** Cursor glow radius in pixels */
 export const CURSOR_GLOW_RADIUS = 60;

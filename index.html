@@ -71,12 +71,7 @@
         <span class="loop-status" id="loopStatus">--</span>
     </div>
 
-    <!-- Effects Controls -->
-    <div class="effects-controls" id="effectsControls" style="display: none;">
-        <button class="effect-btn" id="reverbBtn">Reverb: Off</button>
-    </div>
-
-    <!-- Texture Controls (for Focus/Relaxation modes) -->
+    <!-- Texture Controls (secondary bar when active) -->
     <div class="texture-controls" id="textureControls" style="display: none;">
         <button class="texture-btn" id="noiseBtn">Waves</button>
         <button class="texture-btn" id="tapeBtn">Tape</button>
@@ -90,9 +85,8 @@
         </div>
     </div>
 
-    <!-- Mode Selector -->
+    <!-- Mode Selector (main bottom bar) -->
     <div class="mode-selector" id="modeSelector" style="display: none;">
-        <label class="mode-label">Mode:</label>
         <select class="mode-select" id="modeSelect">
             <option value="focus">Focus</option>
             <option value="relaxation">Relax</option>
@@ -103,7 +97,12 @@
             <option value="formant">Voice</option>
             <option value="ambient">Ambient</option>
         </select>
+        <button class="effect-btn" id="reverbBtn">Reverb</button>
+        <button class="loop-toggle-btn" id="loopToggleBtn" title="Loop">⟳</button>
     </div>
+
+    <!-- Effects Controls (hidden, functionality moved to main bar) -->
+    <div class="effects-controls" id="effectsControls" style="display: none;"></div>
 
     <script type="module" src="/src/main.ts"></script>
 </body>
