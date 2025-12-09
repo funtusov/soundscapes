@@ -5,12 +5,35 @@
 import { addRipple, setCursor, removeCursor, getCanvasSize } from './visualizer';
 import { LoopRecorder } from './LoopRecorder';
 import type { AudioEngine } from './AudioEngine';
-import { CONTROL_BAR_HEIGHT, clamp, type SynthesisMode } from './constants';
+import { CONTROL_BAR_HEIGHT, clamp, TOUCH_TAP_MAX_DURATION, TOUCH_PRESS_MAX_DURATION, type SynthesisMode } from './constants';
+import { haptic } from 'ios-haptics';
 
 interface TouchData {
     x: number;
     y: number;
     startTime: number;
+    crossedPress: boolean;  // Has crossed tap→press threshold (0.2s)
+    crossedHold: boolean;   // Has crossed press→hold threshold (1.0s)
+}
+
+// ============ HAPTIC FEEDBACK ============
+
+/**
+ * Trigger haptic feedback using ios-haptics library (iOS 18+) or Android vibrate API
+ */
+function triggerHaptic(): void {
+    // Try Android/standard Vibration API first
+    if ('vibrate' in navigator) {
+        navigator.vibrate(10);
+        return;
+    }
+
+    // iOS Safari 18+ via ios-haptics library
+    try {
+        haptic();
+    } catch {
+        // Haptics not supported, fail silently
+    }
 }
 
 type TouchId = number | string;
@@ -19,12 +42,32 @@ const activeTouches = new Map<TouchId, TouchData>();
 let loopRecorder: LoopRecorder | null = null;
 
 export function initControls(audio: AudioEngine) {
-    // Mouse events
-    window.addEventListener('mousedown', e => handleStart(e.clientX, e.clientY, 'mouse', audio));
+    // Mouse events - only handle left button (button 0)
+    window.addEventListener('mousedown', e => {
+        if (e.button !== 0) return; // Only left-click
+        handleStart(e.clientX, e.clientY, 'mouse', audio);
+    });
     window.addEventListener('mousemove', e => {
         if (activeTouches.has('mouse')) handleMove(e.clientX, e.clientY, 'mouse', audio);
     });
-    window.addEventListener('mouseup', () => handleEnd('mouse', audio));
+    window.addEventListener('mouseup', e => {
+        if (e.button !== 0) return; // Only left-click
+        handleEnd('mouse', audio);
+    });
+
+    // Stop sounds when window loses focus or mouse leaves
+    window.addEventListener('blur', () => {
+        if (activeTouches.has('mouse')) {
+            handleEnd('mouse', audio);
+        }
+    });
+
+    // Fallback: stop sounds if mouse leaves window during drag
+    document.addEventListener('mouseleave', () => {
+        if (activeTouches.has('mouse')) {
+            handleEnd('mouse', audio);
+        }
+    });
 
     // Touch events
     window.addEventListener('touchstart', e => {
@@ -85,7 +128,7 @@ function handleStart(x: number, y: number, touchId: TouchId, audio: AudioEngine)
         loopRecorder.recordEvent('start', normX, normY, touchId);
     }
 
-    activeTouches.set(touchId, { x, y, startTime: Date.now() });
+    activeTouches.set(touchId, { x, y, startTime: Date.now(), crossedPress: false, crossedHold: false });
     addRipple(x, y);
 }
 
@@ -102,8 +145,23 @@ function handleMove(x: number, y: number, touchId: TouchId, audio: AudioEngine) 
     const touchData = activeTouches.get(touchId)!;
     const duration = (Date.now() - touchData.startTime) / 1000;
 
+    // Check for duration threshold crossings and trigger haptic feedback
+    let { crossedPress, crossedHold } = touchData;
+
+    // Tap → Press threshold (0.2s)
+    if (!crossedPress && duration >= TOUCH_TAP_MAX_DURATION) {
+        crossedPress = true;
+        triggerHaptic();
+    }
+
+    // Press → Hold threshold (1.0s)
+    if (!crossedHold && duration >= TOUCH_PRESS_MAX_DURATION) {
+        crossedHold = true;
+        triggerHaptic();
+    }
+
     audio.update(normX, normY, touchId, duration);
-    activeTouches.set(touchId, { x, y, startTime: touchData.startTime });
+    activeTouches.set(touchId, { x, y, startTime: touchData.startTime, crossedPress, crossedHold });
 
     // Record event if loop recorder is recording
     if (loopRecorder && loopRecorder.isRecording) {
@@ -133,17 +191,13 @@ function handleEnd(touchId: TouchId, audio: AudioEngine) {
 }
 
 export function initModeSelector(audio: AudioEngine) {
-    const buttons = document.querySelectorAll('.mode-btn');
-    buttons.forEach(btn => {
-        const handler = (e: Event) => {
-            e.stopPropagation();
-            e.preventDefault();
-            buttons.forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            audio.initMode((btn as HTMLElement).dataset.mode as SynthesisMode);
-        };
-        btn.addEventListener('click', handler);
-        btn.addEventListener('touchend', handler);
+    const select = document.getElementById('modeSelect') as HTMLSelectElement;
+    if (!select) return;
+
+    select.addEventListener('change', (e) => {
+        e.stopPropagation();
+        const mode = select.value as SynthesisMode;
+        audio.initMode(mode);
     });
 }
 
@@ -206,7 +260,7 @@ export function initDeviceOrientation(audio: AudioEngine) {
                 DeviceOrientationEventConstructor.requestPermission!()
                     .then(state => {
                         if (state === 'granted') {
-                            window.addEventListener('deviceorientation', e => audio.updateOrientation(e.beta, e.gamma), true);
+                            window.addEventListener('deviceorientation', e => audio.updateOrientation(e.beta, e.gamma, e.alpha), true);
                         }
                         return 'o:' + state;
                     })
@@ -234,7 +288,7 @@ export function initDeviceOrientation(audio: AudioEngine) {
             document.getElementById('val-motion')!.innerText = results.join(' ');
         });
     } else {
-        window.addEventListener('deviceorientation', e => audio.updateOrientation(e.beta, e.gamma), true);
+        window.addEventListener('deviceorientation', e => audio.updateOrientation(e.beta, e.gamma, e.alpha), true);
         window.addEventListener('devicemotion', e => {
             const acc = e.acceleration || e.accelerationIncludingGravity;
             audio.updateMotion(acc, e.rotationRate);
@@ -340,4 +394,61 @@ export function initEffectsControls(audio: AudioEngine) {
 
     // Initialize button state
     updateReverbButton();
+}
+
+export function initTextureControls(audio: AudioEngine) {
+    const vinylBtn = document.getElementById('vinylBtn')!;
+    const tapeBtn = document.getElementById('tapeBtn')!;
+    const volumeSlider = document.getElementById('volumeSlider') as HTMLInputElement;
+    const textureControls = document.getElementById('textureControls')!;
+
+    // Show texture controls only for oneheart mode
+    const updateVisibility = () => {
+        textureControls.style.display = audio.mode === 'oneheart' ? 'flex' : 'none';
+    };
+
+    // Vinyl toggle
+    const handleVinyl = (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const enabled = audio.toggleVinyl();
+        vinylBtn.classList.toggle('active', enabled);
+    };
+
+    vinylBtn.addEventListener('click', handleVinyl);
+    vinylBtn.addEventListener('touchend', handleVinyl);
+
+    // Tape hiss toggle
+    const handleTape = (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const enabled = audio.toggleTapeHiss();
+        tapeBtn.classList.toggle('active', enabled);
+    };
+
+    tapeBtn.addEventListener('click', handleTape);
+    tapeBtn.addEventListener('touchend', handleTape);
+
+    // Volume slider
+    volumeSlider.addEventListener('input', (e) => {
+        e.stopPropagation();
+        const value = parseInt(volumeSlider.value, 10);
+        audio.setVolume(value);
+    });
+
+    // Prevent touch events from propagating to canvas
+    volumeSlider.addEventListener('touchstart', (e) => e.stopPropagation());
+    volumeSlider.addEventListener('touchmove', (e) => e.stopPropagation());
+    volumeSlider.addEventListener('touchend', (e) => e.stopPropagation());
+
+    // Initialize visibility
+    updateVisibility();
+
+    // Update visibility when mode changes (via MutationObserver on mode select)
+    const modeSelect = document.getElementById('modeSelect');
+    if (modeSelect) {
+        modeSelect.addEventListener('change', () => {
+            setTimeout(updateVisibility, 50);
+        });
+    }
 }

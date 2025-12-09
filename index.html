@@ -19,7 +19,7 @@
     <!-- HUD -->
     <div class="hud hud-tl">
         Freq: <span id="val-freq">--</span><br>
-        Tilt: <span id="val-tilt">--</span>
+        LPF Cutoff: <span id="val-tilt">--</span>
     </div>
     <div class="hud hud-tr">
         Harm: <span id="val-harm">--</span><br>
@@ -76,15 +76,30 @@
         <button class="effect-btn" id="reverbBtn">Reverb: Off</button>
     </div>
 
+    <!-- Texture Controls (for Oneheart/Focus mode) -->
+    <div class="texture-controls" id="textureControls" style="display: none;">
+        <button class="texture-btn" id="vinylBtn">Vinyl</button>
+        <button class="texture-btn" id="tapeBtn">Tape</button>
+        <div class="volume-control">
+            <span class="volume-label">Vol</span>
+            <input type="range" id="volumeSlider" min="0" max="100" value="70" class="volume-slider">
+        </div>
+    </div>
+
     <!-- Mode Selector -->
     <div class="mode-selector" id="modeSelector" style="display: none;">
-        <button class="mode-btn active" data-mode="wavetable">Wave</button>
-        <button class="mode-btn" data-mode="theremin">Scale</button>
-        <button class="mode-btn" data-mode="fm">FM</button>
-        <button class="mode-btn" data-mode="chords">Chords</button>
-        <button class="mode-btn" data-mode="karplus">String</button>
-        <button class="mode-btn" data-mode="granular">Grain</button>
-        <button class="mode-btn" data-mode="ambient">Ambient</button>
+        <label class="mode-label">Mode:</label>
+        <select class="mode-select" id="modeSelect">
+            <option value="oneheart">Focus</option>
+            <option value="wavetable">Wave</option>
+            <option value="drone">Drone</option>
+            <option value="fm">FM</option>
+            <option value="arpeggiator">Arp</option>
+            <option value="karplus">String</option>
+            <option value="formant">Voice</option>
+            <option value="ambient">Ambient</option>
+            <option value="bassline">Bass</option>
+        </select>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

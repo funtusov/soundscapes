@@ -252,15 +252,93 @@ export const LOOP_ITERATION_OFFSET = 1000;
 /** Available synthesis modes */
 export const SYNTHESIS_MODES = [
     'wavetable',
-    'theremin',
+    'drone',
     'fm',
-    'chords',
+    'arpeggiator',
     'karplus',
-    'granular',
-    'ambient'
+    'formant',
+    'ambient',
+    'bassline',
+    'oneheart'
 ] as const;
 
 export type SynthesisMode = typeof SYNTHESIS_MODES[number];
+
+// ============ DRONE MODE CONSTANTS ============
+
+/** Chord intervals for drone mode (semitones from root) */
+export const DRONE_CHORD_TYPES = {
+    major: [0, 4, 7],
+    minor: [0, 3, 7],
+    sus4: [0, 5, 7],
+    seventh: [0, 4, 7, 10],
+    minor7: [0, 3, 7, 10],
+    power: [0, 7, 12]
+} as const;
+
+/** Drone mode filter sweep time */
+export const DRONE_FILTER_SWEEP_TIME = 2.0;
+
+// ============ ARPEGGIATOR CONSTANTS ============
+
+/** Arpeggiator patterns (intervals from root) */
+export const ARP_PATTERNS = {
+    up: [0, 4, 7, 12],
+    down: [12, 7, 4, 0],
+    updown: [0, 4, 7, 12, 7, 4],
+    random: [0, 4, 7, 12]  // Will be randomized at runtime
+} as const;
+
+/** Arpeggiator speed range (notes per second) */
+export const ARP_SPEED_MIN = 2;
+export const ARP_SPEED_MAX = 16;
+
+/** Arpeggiator note duration as fraction of interval */
+export const ARP_NOTE_DURATION = 0.8;
+
+// ============ FORMANT/VOICE CONSTANTS ============
+
+/** Formant frequencies for vowels [F1, F2, F3] in Hz */
+export const FORMANT_VOWELS = {
+    a: [800, 1200, 2500],   // "ah"
+    e: [400, 2200, 2800],   // "eh"
+    i: [280, 2300, 3000],   // "ee"
+    o: [450, 800, 2500],    // "oh"
+    u: [325, 700, 2500]     // "oo"
+} as const;
+
+/** Formant filter Q values */
+export const FORMANT_Q = [10, 12, 8];
+
+/** Formant transition time */
+export const FORMANT_TRANSITION_TIME = 0.15;
+
+// ============ ENHANCED KARPLUS CONSTANTS ============
+
+/** Karplus body resonance frequencies (ratios of fundamental) */
+export const KARPLUS_BODY_RESONANCES = [1.0, 2.0, 3.5];
+
+/** Karplus sympathetic string ratios */
+export const KARPLUS_SYMPATHETIC_RATIOS = [1.5, 2.0, 3.0];
+
+/** Karplus sympathetic string gain */
+export const KARPLUS_SYMPATHETIC_GAIN = 0.15;
+
+/** Karplus decay range (seconds) */
+export const KARPLUS_DECAY_MIN = 0.5;
+export const KARPLUS_DECAY_MAX = 4.0;
+
+// ============ AMBIENT CHORD CONSTANTS ============
+
+/** Ambient mode chord progressions (semitone offsets from base) */
+export const AMBIENT_CHORDS = [
+    [0, 7, 12],      // Power chord / fifth
+    [0, 5, 12],      // Sus4
+    [0, 4, 7],       // Major
+    [0, 3, 7],       // Minor
+    [0, 7, 14],      // Octave + fifth
+    [0, 5, 7]        // Sus4 close
+] as const;
 
 // ============ UTILITY FUNCTIONS ============
 
@@ -278,3 +356,184 @@ export function hzToMel(hz: number): number {
 export function melToHz(mel: number): number {
     return 700 * (Math.pow(10, mel / 2595) - 1);
 }
+
+// ============ BASSLINE MODE CONSTANTS ============
+
+/** Bassline tempo range (BPM) mapped from compass heading */
+export const BASS_TEMPO_MIN = 60;
+export const BASS_TEMPO_MAX = 180;
+
+/** Bassline base frequency (low bass range) */
+export const BASS_BASE_FREQ = 41.2; // E1
+
+/** Bassline patterns (semitone offsets from root, with durations)
+ * Y-axis controls complexity: simple at bottom, complex at top
+ * Each step is [semitone_offset, duration_fraction_of_beat]
+ */
+export const BASS_PATTERNS = {
+    // Simple: just root
+    pulse: [[0, 1]],
+    // Root-fifth basic
+    bounce: [[0, 0.5], [7, 0.5]],
+    // Classic walking: root, third, fifth, approach
+    walk: [[0, 0.25], [4, 0.25], [7, 0.25], [5, 0.25]],
+    // Chromatic approach walking bass
+    chromatic: [[0, 0.25], [3, 0.25], [5, 0.25], [6, 0.25]],
+    // Bebop-style with passing tones
+    bebop: [[0, 0.25], [2, 0.125], [3, 0.125], [5, 0.25], [7, 0.25]],
+    // Syncopated funk
+    funk: [[0, 0.375], [0, 0.125], [5, 0.25], [7, 0.25]],
+    // Complex jazz walking with octave jump
+    jazz: [[0, 0.25], [4, 0.25], [7, 0.125], [12, 0.125], [10, 0.25]]
+} as const;
+
+export type BassPattern = keyof typeof BASS_PATTERNS;
+
+/** Order of bass patterns for Y-axis selection (simple → complex) */
+export const BASS_PATTERN_ORDER: BassPattern[] = ['pulse', 'bounce', 'walk', 'chromatic', 'bebop', 'funk', 'jazz'];
+
+// ============ ONEHEART MODE CONSTANTS ============
+
+/** Oneheart mood modes */
+export type OneheartMood = 'focus' | 'relaxation' | 'sleep';
+
+/** Oneheart master gain */
+export const ONEHEART_MASTER_GAIN = 0.7;
+
+/** Oneheart evolution loop interval in ms (~60fps) */
+export const ONEHEART_LOOP_INTERVAL = 16;
+
+/** Oneheart chord change interval in ms (20-30 seconds) */
+export const ONEHEART_CHORD_DURATION = 25000;
+
+/** Oneheart chord crossfade time in ms */
+export const ONEHEART_CHORD_TRANSITION = 6000;
+
+/** Oneheart base frequency (low, warm) */
+export const ONEHEART_BASE_FREQ = 65.41; // C2
+
+/** Oneheart LFO rates (very slow for dreamy movement) */
+export const ONEHEART_LFO_SLOW = 0.02;    // ~50 second cycle
+export const ONEHEART_LFO_MEDIUM = 0.08;  // ~12 second cycle
+
+/** Oneheart filter range */
+export const ONEHEART_FILTER_MIN = 200;
+export const ONEHEART_FILTER_MAX = 3000;
+export const ONEHEART_FILTER_SWEEP_TIME = 20000; // 20 seconds for full sweep
+
+/** Oneheart detune range for pad voices (cents) */
+export const ONEHEART_DETUNE_RANGE = 12;
+
+/** Focus mode chord progressions (semitone intervals from root)
+ * Using maj7, add9, sus2 for dreamy, uplifting sound
+ */
+export const ONEHEART_FOCUS_CHORDS = [
+    // Cmaj7
+    [0, 4, 7, 11],
+    // Fmaj7 (IV)
+    [5, 9, 12, 16],
+    // Am7 (vi)
+    [9, 12, 16, 19],
+    // G (V add9)
+    [7, 11, 14, 21],
+    // Emin7 (iii)
+    [4, 7, 11, 14],
+    // Dm7 (ii)
+    [2, 5, 9, 12],
+    // Gsus4
+    [7, 12, 14, 19],
+    // Cadd9
+    [0, 4, 7, 14],
+] as const;
+
+/** Relaxation mode chords (sus chords, warmer) */
+export const ONEHEART_RELAXATION_CHORDS = [
+    [0, 5, 7, 12],      // Csus4
+    [5, 10, 12, 17],    // Fsus4
+    [7, 12, 14, 19],    // Gsus4
+    [0, 5, 7, 14],      // Csus2
+    [9, 12, 16, 21],    // Am add9
+] as const;
+
+/** Sleep mode chords (minor, sparse, darker) */
+export const ONEHEART_SLEEP_CHORDS = [
+    [0, 3, 7],          // Cm
+    [5, 8, 12],         // Fm
+    [7, 10, 14],        // Gm
+    [3, 7, 10],         // Eb
+    [0, 7, 12],         // C5 (power, sparse)
+] as const;
+
+/** Oneheart reverb preset (long, lush tail) */
+export const ONEHEART_REVERB = {
+    decay: 6.0,         // 6 second tail
+    wet: 0.65,
+    dry: 0.5,
+    damping: 0.5        // High frequency rolloff factor
+} as const;
+
+/** Focus mode preset */
+export const FOCUS_PRESET = {
+    chords: ONEHEART_FOCUS_CHORDS,
+    chordDuration: 25000,
+    filterRange: [400, 3000] as const,
+    textureLevel: 0.05,     // Very subtle vinyl
+    reverbDecay: 6.0,
+    evolutionSpeed: 1.0,    // Normal speed
+    brightness: 0.7,        // Brighter for focus
+    padCount: 4,            // 4-voice pad
+    detuneAmount: 8,        // Cents of detune per voice
+} as const;
+
+/** Relaxation mode preset (future) */
+export const RELAXATION_PRESET = {
+    chords: ONEHEART_RELAXATION_CHORDS,
+    chordDuration: 35000,
+    filterRange: [300, 2000] as const,
+    textureLevel: 0.15,
+    reverbDecay: 8.0,
+    evolutionSpeed: 0.7,
+    brightness: 0.5,
+    padCount: 4,
+    detuneAmount: 12,
+} as const;
+
+/** Sleep mode preset (future) */
+export const SLEEP_PRESET = {
+    chords: ONEHEART_SLEEP_CHORDS,
+    chordDuration: 45000,
+    filterRange: [150, 1200] as const,
+    textureLevel: 0.25,
+    reverbDecay: 10.0,
+    evolutionSpeed: 0.4,
+    brightness: 0.25,
+    padCount: 3,
+    detuneAmount: 15,
+} as const;
+
+/** Mood presets map */
+export const ONEHEART_PRESETS = {
+    focus: FOCUS_PRESET,
+    relaxation: RELAXATION_PRESET,
+    sleep: SLEEP_PRESET,
+} as const;
+
+// ============ TEXTURE CONSTANTS ============
+
+/** Vinyl crackle settings */
+export const VINYL_SETTINGS = {
+    baseGain: 0.018,        // Base volume level
+    filterFreq: 2500,       // Lowpass filter cutoff
+    lfoRate: 0.08,          // Wave cycle speed (~12 sec cycle)
+    lfoDepth: 0.9,          // How much LFO affects gain (0-1)
+    lfoShape: 'sine',       // Wave shape for ocean-like feel
+} as const;
+
+/** Tape hiss settings */
+export const TAPE_HISS_SETTINGS = {
+    baseGain: 0.012,        // Base volume level
+    filterLow: 1500,        // Highpass filter cutoff
+    filterHigh: 6000,       // Lowpass filter cutoff
+    lfoRate: 0.05,          // Slower wave (~20 sec cycle)
+    lfoDepth: 0.85,         // How much LFO affects gain
+} as const;
