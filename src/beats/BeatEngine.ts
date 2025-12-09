@@ -127,19 +127,12 @@ export class BeatEngine {
     }
 
     /**
-     * Get the probability for a step based on X position (interpolate between patterns)
+     * Get the probability for a step based on X position (discrete pattern selection)
      */
     private getStepProbability(step: number): number {
         const numPatterns = KICK_PATTERNS.length;
-        const patternIndex = this.patternX * (numPatterns - 1);
-        const lowerIndex = Math.floor(patternIndex);
-        const upperIndex = Math.min(lowerIndex + 1, numPatterns - 1);
-        const blend = patternIndex - lowerIndex;
-
-        const lowerProb = KICK_PATTERNS[lowerIndex][step];
-        const upperProb = KICK_PATTERNS[upperIndex][step];
-
-        return lowerProb + (upperProb - lowerProb) * blend;
+        const patternIndex = Math.round(this.patternX * (numPatterns - 1));
+        return KICK_PATTERNS[patternIndex][step];
     }
 
     /**
