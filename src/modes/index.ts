@@ -12,9 +12,9 @@ export { FMMode } from './fm';
 export { ArpeggiatorMode } from './arpeggiator';
 export { KarplusMode } from './karplus';
 export { FormantMode } from './formant';
-// export { AmbientMode } from './ambient';      // TODO: Extract
-// export { BasslineMode } from './bassline';    // TODO: Extract
-// export { OneheartMode } from './oneheart';    // TODO: Extract
+export { BasslineMode } from './bassline';
+export { AmbientMode } from './ambient';
+export { OneheartMode } from './oneheart';
 
 import type { SynthMode } from './base';
 import type { SynthesisMode } from '../constants/audio';
@@ -24,6 +24,9 @@ import { FMMode } from './fm';
 import { ArpeggiatorMode } from './arpeggiator';
 import { KarplusMode } from './karplus';
 import { FormantMode } from './formant';
+import { BasslineMode } from './bassline';
+import { AmbientMode } from './ambient';
+import { OneheartMode } from './oneheart';
 
 /**
  * Registry of all available synthesis modes
@@ -36,7 +39,9 @@ export const modeRegistry: Partial<Record<SynthesisMode, SynthMode>> = {
     arpeggiator: new ArpeggiatorMode(),
     karplus: new KarplusMode(),
     formant: new FormantMode(),
-    // ambient, bassline, oneheart still in AudioEngine
+    bassline: new BasslineMode(),
+    ambient: new AmbientMode(),
+    oneheart: new OneheartMode(),
 };
 
 /**

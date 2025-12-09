@@ -18,8 +18,18 @@ export interface EngineContext {
     isQuantized: boolean;
     tonic: number;
     scaleType: string;
+    // Orientation parameters (for continuous modes)
+    orientationParams: {
+        pan: number;
+        filterMod: number;
+        lfoRate: number;
+        shake: number;
+        compass: number;
+    };
     // HUD update callback
     updateHUD: (freq: string, harm: string) => void;
+    // Reverb control callback (for Oneheart mode)
+    setReverb?: (decay: number, wet: number, dry: number) => void;
 }
 
 // Re-export constants for modes to use
