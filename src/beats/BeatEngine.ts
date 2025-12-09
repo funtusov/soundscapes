@@ -115,13 +115,11 @@ export class BeatEngine {
      * Schedule a single step
      */
     private scheduleStep(step: number, time: number): void {
-        // Get pattern probability for this step based on X position
-        const probability = this.getStepProbability(step);
+        // Get pattern value for this step (255 = kick, 0 = no kick)
+        const value = this.getStepProbability(step);
 
-        // Random threshold check (Grids-style)
-        const threshold = Math.random() * 255;
-
-        if (probability > threshold) {
+        // Deterministic: only 255 triggers a kick
+        if (value === 255) {
             this.playKick(time);
         }
     }
