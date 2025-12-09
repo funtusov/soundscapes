@@ -41,6 +41,9 @@ import {
 // Import mode system
 import { getMode, type SynthMode, type EngineContext } from './modes';
 
+// Import beat engine
+import { BeatEngine } from './beats/BeatEngine';
+
 // Types are defined inline below for now (TODO: migrate to ./types)
 
 // ============ TYPE DEFINITIONS ============
@@ -321,6 +324,9 @@ export class AudioEngine {
     // Current mode instance (from mode registry)
     private currentMode: SynthMode | null = null;
 
+    // Beat engine (runs independently of mode)
+    beatEngine: BeatEngine | null = null;
+
     constructor() {
         // Silent audio for iOS unlock
         this.silentAudio = new Audio("data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYNAAAAAAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYNAAAAAAAAAAAAAAAAAAAA");
@@ -393,6 +399,10 @@ export class AudioEngine {
         this.delayFeedback.connect(delayR);
         delayL.connect(this.analyser);
         delayR.connect(this.analyser);
+
+        // Initialize beat engine (routes through reverb chain)
+        this.beatEngine = new BeatEngine();
+        this.beatEngine.init(this.ctx, this.filter);
 
         this.initMode(this.mode);
     }
@@ -1126,7 +1136,8 @@ export class AudioEngine {
             ambient: ['X: Drift | β: Cutoff', 'Y: Bright | Tap: Chord'],
             bassline: ['X: Root | α: Tempo', 'Y: Pattern | Compass'],
             focus: ['X: Texture | Y: Voicing', 'Focus Mode | Tap: Chord'],
-            relaxation: ['X: Depth | Y: Drift', 'Relax Mode | Tap: Chord']
+            relaxation: ['X: Depth | Y: Drift', 'Relax Mode | Tap: Chord'],
+            beats: ['X: Pattern | Density', 'Y: Kick | Pitch/Punch']
         };
 
         const l = labels[this.mode];
@@ -1194,6 +1205,15 @@ export class AudioEngine {
 
         const now = this.ctx!.currentTime;
 
+        // Beats mode: touch just sets pattern, play/stop via button
+        if (this.mode === 'beats') {
+            // Auto-start beats on first touch if not playing
+            if (this.beatEngine && !this.beatEngine.getIsPlaying()) {
+                this.beatEngine.start();
+            }
+            return;
+        }
+
         // Delegate to mode class if available
         if (this.currentMode) {
             // Continuous modes manage their own master gain
@@ -1213,6 +1233,11 @@ export class AudioEngine {
     stop(touchId: TouchId = 0, duration = 0): void {
         if (!this.ctx) return;
         const now = this.ctx.currentTime;
+
+        // Beats mode: lifting finger doesn't stop the beat
+        if (this.mode === 'beats') {
+            return;
+        }
 
         // Get touch category and profile for release shaping
         const category = this.getTouchCategory(duration);
@@ -1245,6 +1270,16 @@ export class AudioEngine {
         // Input validation - clamp coordinates to [0, 1]
         const clampedX = clamp(x, 0, 1);
         const clampedY = clamp(y, 0, 1);
+
+        // Beats mode: control pattern with X/Y
+        if (this.mode === 'beats' && this.beatEngine) {
+            this.beatEngine.setPattern(clampedX, clampedY);
+            // Update HUD with pattern info
+            const densityLabel = clampedX < 0.3 ? 'Simple' : clampedX < 0.7 ? 'Medium' : 'Complex';
+            const punchLabel = clampedY < 0.3 ? 'Deep' : clampedY < 0.7 ? 'Balanced' : 'Punchy';
+            this.updateHUD(densityLabel, punchLabel);
+            return;
+        }
 
         // Delegate to mode class if available
         if (this.currentMode) {

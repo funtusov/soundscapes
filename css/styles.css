@@ -461,3 +461,96 @@ canvas {
     cursor: pointer;
     border: none;
 }
+
+/* Beats controls */
+.beats-controls {
+    position: absolute;
+    bottom: 44px;
+    left: 0;
+    right: 0;
+    height: 40px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    background: rgba(5, 5, 5, 0.95);
+    z-index: 15;
+}
+
+.beats-play-btn {
+    width: 36px;
+    height: 36px;
+    border: 1px solid rgba(255, 150, 50, 0.6);
+    background: transparent;
+    color: rgba(255, 150, 50, 0.8);
+    font-size: 1rem;
+    cursor: pointer;
+    border-radius: 50%;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.beats-play-btn:hover {
+    border-color: rgba(255, 150, 50, 0.9);
+    background: rgba(255, 150, 50, 0.15);
+}
+
+.beats-play-btn.playing {
+    border-color: #ff9632;
+    color: #ff9632;
+    background: rgba(255, 150, 50, 0.25);
+    box-shadow: 0 0 10px rgba(255, 150, 50, 0.4);
+}
+
+.tempo-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.tempo-label {
+    color: rgba(255, 150, 50, 0.7);
+    font-size: 0.7rem;
+    font-family: 'Courier New', monospace;
+    text-transform: uppercase;
+}
+
+.tempo-slider {
+    width: 80px;
+    height: 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: rgba(255, 150, 50, 0.3);
+    border-radius: 2px;
+    outline: none;
+}
+
+.tempo-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    background: rgba(255, 150, 50, 0.8);
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+}
+
+.tempo-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    background: rgba(255, 150, 50, 0.8);
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+}
+
+.tempo-value {
+    color: rgba(255, 150, 50, 0.9);
+    font-size: 0.75rem;
+    font-family: 'Courier New', monospace;
+    min-width: 28px;
+    text-align: right;
+}

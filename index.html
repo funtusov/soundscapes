@@ -71,6 +71,20 @@
         <span class="loop-status" id="loopStatus">--</span>
     </div>
 
+    <!-- Beats Controls (for Beats mode) -->
+    <div class="beats-controls" id="beatsControls" style="display: none;">
+        <button class="beats-play-btn" id="beatsPlayBtn">▶</button>
+        <div class="tempo-control">
+            <span class="tempo-label">BPM</span>
+            <input type="range" id="tempoSlider" min="40" max="200" value="120" class="tempo-slider">
+            <span class="tempo-value" id="tempoValue">120</span>
+        </div>
+        <div class="volume-control">
+            <span class="volume-label">Vol</span>
+            <input type="range" id="beatsVolumeSlider" min="0" max="100" value="70" class="volume-slider">
+        </div>
+    </div>
+
     <!-- Texture Controls (secondary bar when active) -->
     <div class="texture-controls" id="textureControls" style="display: none;">
         <button class="texture-btn" id="noiseBtn">Waves</button>
@@ -90,6 +104,7 @@
         <select class="mode-select" id="modeSelect">
             <option value="focus">Focus</option>
             <option value="relaxation">Relax</option>
+            <option value="beats">Beats</option>
             <option value="wavetable">Wave</option>
             <option value="fm">FM</option>
             <option value="arpeggiator">Arp</option>
