@@ -400,9 +400,9 @@ export class AudioEngine {
         delayL.connect(this.analyser);
         delayR.connect(this.analyser);
 
-        // Initialize beat engine (routes through reverb chain)
+        // Initialize beat engine (routes directly to master, bypassing reverb)
         this.beatEngine = new BeatEngine();
-        this.beatEngine.init(this.ctx, this.filter);
+        this.beatEngine.init(this.ctx, this.masterGain);
 
         this.initMode(this.mode);
     }

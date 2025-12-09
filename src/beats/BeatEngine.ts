@@ -6,20 +6,20 @@
  */
 
 // Grids-style pattern maps for kick drum
-// 16 steps per bar (16th notes), but sparse placement
-// Values 0-255 represent probability threshold
-// Left = ~4 kicks/bar, Right = ~6-8 kicks/bar
+// 16 steps per bar (16th notes), sparse placement
+// Values 0-255 represent probability threshold (255 = always, 0 = never)
+// All patterns have 4-8 kicks per bar
 const KICK_PATTERNS: number[][] = [
-    // Simple four-on-floor (4 kicks: beats 1,2,3,4)
+    // Basic four-on-floor (4 kicks: beats 1,2,3,4)
     [255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0],
-    // Half-time feel (2 kicks: beats 1,3)
-    [255, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0],
-    // Four with slight variation (~4-5 kicks)
-    [255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 64, 255, 0, 0, 0],
-    // Syncopated (~5-6 kicks)
-    [255, 0, 0, 0, 255, 0, 64, 0, 255, 0, 0, 0, 255, 0, 128, 0],
-    // Complex (~6-8 kicks with offbeats)
-    [255, 0, 0, 128, 255, 0, 64, 0, 255, 0, 0, 128, 255, 0, 128, 64],
+    // Four-on-floor with pickup (5 kicks)
+    [255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 255, 0],
+    // Syncopated (6 kicks)
+    [255, 0, 0, 0, 255, 0, 255, 0, 255, 0, 0, 0, 255, 0, 255, 0],
+    // Busy (7 kicks)
+    [255, 0, 0, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0],
+    // Full offbeat (8 kicks)
+    [255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0],
 ];
 
 export class BeatEngine {
