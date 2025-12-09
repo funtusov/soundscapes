@@ -6,19 +6,20 @@
  */
 
 // Grids-style pattern maps for kick drum
-// Each row is a different "feel", columns are steps (16 steps)
+// 16 steps per bar (16th notes), but sparse placement
 // Values 0-255 represent probability threshold
+// Left = ~4 kicks/bar, Right = ~6-8 kicks/bar
 const KICK_PATTERNS: number[][] = [
-    // Simple four-on-floor
+    // Simple four-on-floor (4 kicks: beats 1,2,3,4)
     [255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0],
-    // Basic with some variation
-    [255, 0, 0, 64, 255, 0, 0, 0, 255, 0, 64, 0, 255, 0, 0, 128],
-    // Offbeat kicks
-    [255, 0, 0, 128, 255, 0, 64, 0, 255, 0, 0, 128, 255, 64, 0, 0],
-    // Syncopated
-    [255, 0, 64, 0, 200, 0, 128, 0, 255, 0, 64, 128, 200, 0, 64, 0],
-    // Busy/complex
-    [255, 64, 128, 64, 255, 64, 128, 64, 255, 64, 128, 64, 255, 128, 64, 128],
+    // Half-time feel (2 kicks: beats 1,3)
+    [255, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0],
+    // Four with slight variation (~4-5 kicks)
+    [255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 64, 255, 0, 0, 0],
+    // Syncopated (~5-6 kicks)
+    [255, 0, 0, 0, 255, 0, 64, 0, 255, 0, 0, 0, 255, 0, 128, 0],
+    // Complex (~6-8 kicks with offbeats)
+    [255, 0, 0, 128, 255, 0, 64, 0, 255, 0, 0, 128, 255, 0, 128, 64],
 ];
 
 export class BeatEngine {
@@ -26,7 +27,7 @@ export class BeatEngine {
     private masterGain: GainNode | null = null;
     private isPlaying = false;
     private currentStep = 0;
-    private tempo = 120; // BPM
+    private tempo = 105; // BPM
     private nextStepTime = 0;
     private schedulerInterval: ReturnType<typeof setInterval> | null = null;
 
