@@ -5,7 +5,7 @@
 import { addRipple, setCursor, removeCursor, getCanvasSize } from './visualizer';
 import { LoopRecorder } from './LoopRecorder';
 import type { AudioEngine } from './AudioEngine';
-import { CONTROL_BAR_HEIGHT, clamp, TOUCH_TAP_MAX_DURATION, TOUCH_PRESS_MAX_DURATION, type SynthesisMode } from './constants';
+import { clamp, TOUCH_TAP_MAX_DURATION, TOUCH_PRESS_MAX_DURATION, type SynthesisMode } from './constants';
 import { haptic } from 'ios-haptics';
 
 interface TouchData {
@@ -112,13 +112,13 @@ export function initControls(audio: AudioEngine) {
 function handleStart(x: number, y: number, touchId: TouchId, audio: AudioEngine) {
     const { width, height } = getCanvasSize();
 
-    // Ignore touches in the control area
-    if (y > height - CONTROL_BAR_HEIGHT) return;
+    // Ignore touches below the canvas (in control area)
+    if (y > height) return;
 
     setCursor(x, y, touchId);
 
     const normX = x / width;
-    const normY = clamp(1 - (y / (height - CONTROL_BAR_HEIGHT)), 0, 1);
+    const normY = clamp(1 - (y / height), 0, 1);
 
     if (audio.ctx) {
         audio.start(touchId);
@@ -142,7 +142,7 @@ function handleMove(x: number, y: number, touchId: TouchId, audio: AudioEngine) 
     setCursor(x, y, touchId);
 
     const normX = x / width;
-    const normY = clamp(1 - (y / (height - CONTROL_BAR_HEIGHT)), 0, 1);
+    const normY = clamp(1 - (y / height), 0, 1);
 
     const touchData = activeTouches.get(touchId)!;
     const duration = (Date.now() - touchData.startTime) / 1000;
@@ -180,7 +180,7 @@ function handleEnd(touchId: TouchId, audio: AudioEngine) {
     const duration = (Date.now() - touchData.startTime) / 1000;
     const { width, height } = getCanvasSize();
     const normX = touchData.x / width;
-    const normY = clamp(1 - (touchData.y / (height - CONTROL_BAR_HEIGHT)), 0, 1);
+    const normY = clamp(1 - (touchData.y / height), 0, 1);
 
     // Record event if loop recorder is recording
     if (loopRecorder && loopRecorder.isRecording) {

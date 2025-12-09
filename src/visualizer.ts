@@ -116,8 +116,10 @@ export function initMelFilterbank(audio: AudioEngine) {
 }
 
 function resize() {
-    width = window.innerWidth;
-    height = window.innerHeight;
+    // Use the actual canvas element size (respects CSS sizing)
+    const rect = canvas.getBoundingClientRect();
+    width = rect.width;
+    height = rect.height;
     canvas.width = width;
     canvas.height = height;
 
