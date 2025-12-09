@@ -5,7 +5,7 @@
 import { addRipple, setCursor, removeCursor, getCanvasSize } from './visualizer';
 import { LoopRecorder } from './LoopRecorder';
 import type { AudioEngine } from './AudioEngine';
-import { clamp, TOUCH_TAP_MAX_DURATION, TOUCH_PRESS_MAX_DURATION, CONTROL_BAR_HEIGHT, type SynthesisMode } from './constants';
+import { clamp, TOUCH_TAP_MAX_DURATION, TOUCH_PRESS_MAX_DURATION, type SynthesisMode } from './constants';
 import { haptic } from 'ios-haptics';
 
 interface TouchData {
@@ -40,6 +40,19 @@ type TouchId = number | string;
 
 const activeTouches = new Map<TouchId, TouchData>();
 let loopRecorder: LoopRecorder | null = null;
+
+/**
+ * Update scale controls elevation based on whether secondary bar (texture/beats) is visible
+ */
+export function updateScaleControlsPosition(audio: AudioEngine): void {
+    const scaleControls = document.getElementById('scaleControls');
+    if (!scaleControls) return;
+
+    // Secondary bar is visible for these modes
+    const hasSecondaryBar = audio.mode === 'focus' || audio.mode === 'relaxation' ||
+                           audio.mode === 'wavetable' || audio.mode === 'beats';
+    scaleControls.classList.toggle('elevated', hasSecondaryBar);
+}
 
 export function initControls(audio: AudioEngine) {
     // Mouse events - only handle left button (button 0)
@@ -113,15 +126,15 @@ export function initControls(audio: AudioEngine) {
 
 function handleStart(x: number, y: number, touchId: TouchId, audio: AudioEngine) {
     const { width, height } = getCanvasSize();
-    const playableHeight = height - CONTROL_BAR_HEIGHT;
 
-    // Ignore touches in the control bar area
-    if (y > playableHeight) return;
+    // Canvas height already excludes control bar (CSS: calc(100% - 90px))
+    // Ignore touches outside the canvas
+    if (y > height) return;
 
     setCursor(x, y, touchId);
 
     const normX = x / width;
-    const normY = clamp(1 - (y / playableHeight), 0, 1);
+    const normY = clamp(1 - (y / height), 0, 1);
 
     if (audio.ctx) {
         audio.start(touchId);
@@ -141,12 +154,11 @@ function handleMove(x: number, y: number, touchId: TouchId, audio: AudioEngine) 
     if (!activeTouches.has(touchId)) return;
 
     const { width, height } = getCanvasSize();
-    const playableHeight = height - CONTROL_BAR_HEIGHT;
 
     setCursor(x, y, touchId);
 
     const normX = x / width;
-    const normY = clamp(1 - (y / playableHeight), 0, 1);
+    const normY = clamp(1 - (y / height), 0, 1);
 
     const touchData = activeTouches.get(touchId)!;
     const duration = (Date.now() - touchData.startTime) / 1000;
@@ -183,9 +195,9 @@ function handleEnd(touchId: TouchId, audio: AudioEngine) {
 
     const duration = (Date.now() - touchData.startTime) / 1000;
     const { width, height } = getCanvasSize();
-    const playableHeight = height - CONTROL_BAR_HEIGHT;
     const normX = touchData.x / width;
-    const normY = clamp(1 - (touchData.y / playableHeight), 0, 1);
+    // Canvas height already excludes control bar (CSS: calc(100% - 90px))
+    const normY = clamp(1 - (touchData.y / height), 0, 1);
 
     // Record event if loop recorder is recording
     if (loopRecorder && loopRecorder.isRecording) {
@@ -451,6 +463,8 @@ export function initTextureControls(audio: AudioEngine) {
     const updateVisibility = () => {
         const showTextures = audio.mode === 'focus' || audio.mode === 'relaxation' || audio.mode === 'wavetable';
         textureControls.style.display = showTextures ? 'flex' : 'none';
+        // Elevate scale controls when secondary bar is visible
+        updateScaleControlsPosition(audio);
     };
 
     // Noise toggle (short press) and cycle type (long press)
@@ -561,6 +575,8 @@ export function initBeatsControls(audio: AudioEngine) {
     // Show/hide beats controls based on mode
     const updateVisibility = () => {
         beatsControls.style.display = audio.mode === 'beats' ? 'flex' : 'none';
+        // Elevate scale controls when secondary bar is visible
+        updateScaleControlsPosition(audio);
     };
 
     // Update play button state

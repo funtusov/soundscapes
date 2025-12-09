@@ -61,6 +61,10 @@ function generateWaveformCoeffs(): WaveformCoeffs[] {
 const WAVEFORM_COEFFS = generateWaveformCoeffs();
 const WAVEFORM_NAMES = ['sine', 'triangle', 'saw', 'square'];
 
+// Loudness compensation factors (inverse of relative RMS energy)
+// Sine=1.0, Triangle≈0.9, Saw≈0.5, Square≈0.6
+const LOUDNESS_COMPENSATION = [1.0, 0.9, 0.5, 0.6];
+
 /**
  * Interpolate between two waveforms
  */
@@ -78,6 +82,21 @@ function interpolateWaveforms(
     }
 
     return { real, imag };
+}
+
+/**
+ * Get loudness compensation factor for Y position
+ * Returns a gain multiplier to equalize perceived loudness
+ */
+function getLoudnessCompensation(y: number): number {
+    const scaledY = y * 3; // 0-3 range
+    const waveIndex = Math.min(2, Math.floor(scaledY));
+    const t = scaledY - waveIndex;
+
+    // Interpolate between compensation factors
+    const compA = LOUDNESS_COMPENSATION[waveIndex];
+    const compB = LOUDNESS_COMPENSATION[waveIndex + 1];
+    return compA * (1 - t) + compB * t;
 }
 
 export class WavetableMode extends BaseSynthMode {
@@ -165,7 +184,11 @@ export class WavetableMode extends BaseSynthMode {
         const note = this.quantizeToScale(x, 3, 55, engine);
 
         voice.osc.frequency.setTargetAtTime(note.freq, now, 0.005);
-        voice.gain.gain.setTargetAtTime(VOICE_GAIN, now, 0.005);
+
+        // Apply loudness compensation to equalize perceived volume across waveforms
+        const compensation = getLoudnessCompensation(y);
+        const compensatedGain = VOICE_GAIN * compensation;
+        voice.gain.gain.setTargetAtTime(compensatedGain, now, 0.005);
 
         // Morph waveform based on Y position
         const morphedWave = this.getMorphedWave(ctx, y);

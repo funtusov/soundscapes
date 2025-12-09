@@ -239,8 +239,6 @@ export class AudioEngine {
         } else if (mode === 'relaxation') {
             this.oneheartMood = 'relaxation';
         }
-
-        this.updateHUDLabels();
     }
 
     // ============ TOUCH CATEGORY DETECTION ============
@@ -782,29 +780,6 @@ export class AudioEngine {
         const harmEl = document.getElementById('val-harm');
         if (freqEl) freqEl.innerText = freq;
         if (harmEl) harmEl.innerText = harm;
-    }
-
-    private updateHUDLabels(): void {
-        const labels: Record<SynthesisMode, [string, string]> = {
-            wavetable: ['X: Pitch | β: Cutoff', 'Y: Waveform | γ: Q'],
-            drone: ['X: Root | β: Cutoff', 'Y: Chord | γ: Q'],
-            fm: ['X: Pitch | β: Cutoff', 'Y: Ratio | γ: Q'],
-            arpeggiator: ['X: Root | β: Cutoff', 'Y: Pattern | γ: Q'],
-            karplus: ['X: Note | β: Cutoff', 'Y: Decay | γ: Q'],
-            formant: ['X: Pitch | β: Cutoff', 'Y: Vowel | γ: Q'],
-            ambient: ['X: Drift | β: Cutoff', 'Y: Bright | Tap: Chord'],
-            bassline: ['X: Root | α: Tempo', 'Y: Pattern | Compass'],
-            focus: ['X: Texture | Y: Voicing', 'Focus Mode | Tap: Chord'],
-            relaxation: ['X: Depth | Y: Drift', 'Relax Mode | Tap: Chord'],
-            beats: ['X: Pattern | Density', 'Y: Kick | Pitch/Punch']
-        };
-
-        const l = labels[this.mode];
-
-        const blEl = document.getElementById('hud-bl');
-        const brEl = document.getElementById('hud-br');
-        if (blEl) blEl.innerText = l[0];
-        if (brEl) brEl.innerText = l[1];
     }
 
     quantizeToScale(x: number, octaves = 3, baseFreq = 55): NoteInfo {
