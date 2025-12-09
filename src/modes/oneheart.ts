@@ -3,6 +3,9 @@
  *
  * Continuous ambient pad generator inspired by Oneheart's focus music.
  * Warm, evolving pads with slow chord changes and rich detuning.
+ *
+ * X-axis: Pitch (transpose chord up/down)
+ * Y-axis: Voicing (tight/close to open/wide spread)
  * Touch triggers chord transitions.
  */
 
@@ -32,9 +35,16 @@ interface OneheartNodes {
     masterGain: GainNode;
 }
 
+// Pitch range in semitones (X-axis controls transpose)
+const PITCH_RANGE_SEMITONES = 12; // -12 to +12 semitones (2 octaves)
+
+// Voicing spread multiplier range (Y-axis controls how spread out the chord is)
+const VOICING_TIGHT = 0.5;  // Tight voicing (intervals compressed)
+const VOICING_WIDE = 1.5;   // Wide voicing (intervals expanded)
+
 export class OneheartMode extends BaseSynthMode {
     readonly name = 'oneheart';
-    readonly hudLabels: [string, string] = ['Focus', 'Evolving'];
+    readonly hudLabels: [string, string] = ['X: Pitch', 'Y: Voicing'];
     readonly isContinuous = true;
 
     private nodes: OneheartNodes | null = null;
@@ -42,6 +52,13 @@ export class OneheartMode extends BaseSynthMode {
     private loopInterval: ReturnType<typeof setInterval> | null = null;
     private engineRef: EngineContext | null = null;
     private mood: OneheartMood = 'focus';
+
+    // Touch-controlled parameters
+    private targetPitchOffset = 0;  // Semitones offset from base
+    private currentPitchOffset = 0; // Smoothly interpolated
+    private targetVoicing = 1.0;    // Voicing spread multiplier
+    private currentVoicing = 1.0;   // Smoothly interpolated
+    private isTouching = false;
 
     setMood(mood: OneheartMood): void {
         this.mood = mood;
@@ -216,16 +233,25 @@ export class OneheartMode extends BaseSynthMode {
         const nodes = this.nodes;
         const preset = ONEHEART_PRESETS[this.mood];
         const dt = ONEHEART_LOOP_INTERVAL / 1000;
+        const chords = preset.chords;
 
         // Update evolution phase (slow sine wave for breathing effect)
         state.evolutionPhase += dt * 0.1 * preset.evolutionSpeed;
         state.filterPhase += dt * 0.05;
+
+        // Smoothly interpolate pitch and voicing
+        const interpSpeed = this.isTouching ? 0.08 : 0.02; // Faster when touching
+        this.currentPitchOffset += (this.targetPitchOffset - this.currentPitchOffset) * interpSpeed;
+        this.currentVoicing += (this.targetVoicing - this.currentVoicing) * interpSpeed;
 
         // Check if it's time for a chord change
         const timeSinceChordChange = Date.now() - state.lastChordChange;
         if (timeSinceChordChange > preset.chordDuration) {
             this.triggerChordChange(engine);
         }
+
+        // Get current chord intervals
+        const chord = chords[state.currentChordIndex];
 
         // Evolve pad voices
         const breatheMod = 0.85 + Math.sin(state.evolutionPhase) * 0.15;
@@ -234,16 +260,30 @@ export class OneheartMode extends BaseSynthMode {
             // Slowly evolve detune for organic movement
             pad.detunePhase += dt * (0.08 + padIndex * 0.02);
 
-            pad.oscs.forEach((o, oscIndex) => {
-                // Subtle detune drift
-                const detuneDrift = Math.sin(pad.detunePhase + oscIndex * 1.5) * 2;
-                o.osc.detune.setTargetAtTime(o.baseDetune + detuneDrift, now, 0.5);
+            // Calculate frequency with pitch offset and voicing
+            if (padIndex < chord.length) {
+                const baseSemitone = chord[padIndex];
+                // Apply voicing: root stays fixed, intervals scale with voicing
+                const voicedSemitone = padIndex === 0
+                    ? baseSemitone
+                    : baseSemitone * this.currentVoicing;
+                // Apply pitch offset
+                const finalSemitone = voicedSemitone + this.currentPitchOffset;
+                const targetFreq = ONEHEART_BASE_FREQ * Math.pow(2, finalSemitone / 12);
 
-                // Subtle gain modulation (breathing)
-                const baseGain = o.osc.type === 'sine' ? 0.15 : 0.08;
-                const modGain = baseGain * breatheMod;
-                o.gain.gain.setTargetAtTime(modGain, now, 0.3);
-            });
+                pad.oscs.forEach((o, oscIndex) => {
+                    o.osc.frequency.setTargetAtTime(targetFreq, now, 0.3);
+
+                    // Subtle detune drift
+                    const detuneDrift = Math.sin(pad.detunePhase + oscIndex * 1.5) * 2;
+                    o.osc.detune.setTargetAtTime(o.baseDetune + detuneDrift, now, 0.5);
+
+                    // Subtle gain modulation (breathing)
+                    const baseGain = o.osc.type === 'sine' ? 0.15 : 0.08;
+                    const modGain = baseGain * breatheMod;
+                    o.gain.gain.setTargetAtTime(modGain, now, 0.3);
+                });
+            }
 
             // Subtle panning drift
             const panDrift = Math.sin(pad.detunePhase * 0.3) * 0.1;
@@ -265,10 +305,14 @@ export class OneheartMode extends BaseSynthMode {
 
         engine.filter.frequency.setTargetAtTime(finalFilter, now, 0.5);
 
-        // Update HUD
+        // Update HUD with pitch and voicing info
         const chordNames = ['I', 'IV', 'vi', 'V', 'iii', 'ii', 'Vsus', 'Iadd9'];
         const chordName = chordNames[state.currentChordIndex % chordNames.length] || 'I';
-        engine.updateHUD('Focus', chordName + ' ○');
+        const pitchStr = this.currentPitchOffset >= 0
+            ? `+${Math.round(this.currentPitchOffset)}`
+            : `${Math.round(this.currentPitchOffset)}`;
+        const voicingStr = this.currentVoicing < 0.8 ? 'tight' : this.currentVoicing > 1.2 ? 'wide' : 'med';
+        engine.updateHUD(`${chordName} ${pitchStr}st`, voicingStr);
     }
 
     private triggerChordChange(engine: EngineContext): void {
@@ -302,22 +346,34 @@ export class OneheartMode extends BaseSynthMode {
 
     start(_touchId: TouchId, _engine: EngineContext): void {
         // Oneheart is continuous, no per-touch voices
+        this.isTouching = true;
     }
 
-    update(_x: number, _y: number, _touchId: TouchId, _duration: number, engine: EngineContext): void {
-        // Touch triggers a chord change
+    update(x: number, y: number, _touchId: TouchId, duration: number, engine: EngineContext): void {
         if (!this.state) return;
         this.engineRef = engine;
+        this.isTouching = true;
 
-        // Only trigger chord change if enough time has passed (prevent spam)
-        const timeSinceChange = Date.now() - this.state.lastChordChange;
-        if (timeSinceChange > 2000) {
-            this.triggerChordChange(engine);
+        // X controls pitch offset (-12 to +12 semitones)
+        // Center (0.5) = no offset, left = lower, right = higher
+        this.targetPitchOffset = (x - 0.5) * 2 * PITCH_RANGE_SEMITONES;
+
+        // Y controls voicing spread
+        // Bottom (0) = tight/close voicing, Top (1) = wide/open voicing
+        this.targetVoicing = VOICING_TIGHT + y * (VOICING_WIDE - VOICING_TIGHT);
+
+        // Trigger chord change on initial touch (duration < 0.1s means new touch)
+        if (duration < 0.1) {
+            const timeSinceChange = Date.now() - this.state.lastChordChange;
+            if (timeSinceChange > 2000) {
+                this.triggerChordChange(engine);
+            }
         }
     }
 
     stop(_touchId: TouchId, _releaseTime: number, _engine: EngineContext): void {
-        // Oneheart is continuous, doesn't stop on touch end
+        // Mark as not touching - parameters will slowly drift back to center
+        this.isTouching = false;
     }
 
     cleanup(): void {
