@@ -5,21 +5,20 @@
  * Y axis: kick sound character (pitch/decay)
  */
 
-// Grids-style pattern maps for kick drum
-// 16 steps per bar (16th notes), sparse placement
-// Values 0-255 represent probability threshold (255 = always, 0 = never)
-// All patterns have 4-8 kicks per bar
+// Kick patterns: 16 steps per bar (16th notes)
+// All patterns have exactly 4 kicks
+// X axis: left = straight, right = syncopated
 const KICK_PATTERNS: number[][] = [
-    // Basic four-on-floor (4 kicks: beats 1,2,3,4)
-    [255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0],
-    // Four-on-floor with pickup (5 kicks)
-    [255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 255, 0],
-    // Syncopated (6 kicks)
-    [255, 0, 0, 0, 255, 0, 255, 0, 255, 0, 0, 0, 255, 0, 255, 0],
-    // Busy (7 kicks)
-    [255, 0, 0, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0],
-    // Full offbeat (8 kicks)
-    [255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0],
+    // Straight four-on-floor: 1, 2, 3, 4
+    [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+    // Slight variation: 1, 2, 3, 4-and
+    [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0],
+    // Offbeat: 1, 2-and, 3, 4-and
+    [1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0],
+    // Syncopated: 1, 2-and, 3-and, 4
+    [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0],
+    // Very syncopated: 1, 1-e-and, 3, 3-e-and
+    [1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0],
 ];
 
 export class BeatEngine {
@@ -64,7 +63,15 @@ export class BeatEngine {
      * Start the sequencer
      */
     start(): void {
-        if (!this.ctx || this.isPlaying) return;
+        if (!this.ctx) return;
+
+        // Safety: clear any existing interval first
+        if (this.schedulerInterval) {
+            clearInterval(this.schedulerInterval);
+            this.schedulerInterval = null;
+        }
+
+        if (this.isPlaying) return;
 
         this.isPlaying = true;
         this.currentStep = 0;
@@ -72,6 +79,7 @@ export class BeatEngine {
 
         // Start scheduler loop (runs every 25ms to schedule ahead)
         this.schedulerInterval = setInterval(() => this.scheduler(), 25);
+        console.log('BeatEngine started, tempo:', this.tempo);
     }
 
     /**
@@ -115,22 +123,13 @@ export class BeatEngine {
      * Schedule a single step
      */
     private scheduleStep(step: number, time: number): void {
-        // Get pattern value for this step (255 = kick, 0 = no kick)
-        const value = this.getStepProbability(step);
+        // Select pattern based on X position
+        const patternIndex = Math.round(this.patternX * (KICK_PATTERNS.length - 1));
+        const pattern = KICK_PATTERNS[patternIndex];
 
-        // Deterministic: only 255 triggers a kick
-        if (value === 255) {
+        if (pattern[step] === 1) {
             this.playKick(time);
         }
-    }
-
-    /**
-     * Get the probability for a step based on X position (discrete pattern selection)
-     */
-    private getStepProbability(step: number): number {
-        const numPatterns = KICK_PATTERNS.length;
-        const patternIndex = Math.round(this.patternX * (numPatterns - 1));
-        return KICK_PATTERNS[patternIndex][step];
     }
 
     /**
