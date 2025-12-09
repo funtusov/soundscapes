@@ -79,7 +79,6 @@ export class BeatEngine {
 
         // Start scheduler loop (runs every 25ms to schedule ahead)
         this.schedulerInterval = setInterval(() => this.scheduler(), 25);
-        console.log('BeatEngine started, tempo:', this.tempo);
     }
 
     /**

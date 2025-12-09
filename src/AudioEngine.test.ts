@@ -19,7 +19,7 @@ describe('AudioEngine', () => {
 
     describe('initialization', () => {
         it('creates an instance with default mode', () => {
-            expect(engine.mode).toBe('wavetable');
+            expect(engine.mode).toBe('focus');
         });
 
         it('starts with quantization disabled', () => {
@@ -194,8 +194,8 @@ describe('Synthesis Modes', () => {
         engine = new AudioEngine();
     });
 
-    it('default mode is wavetable', () => {
-        expect(engine.mode).toBe('wavetable');
+    it('default mode is focus', () => {
+        expect(engine.mode).toBe('focus');
     });
 
     it('mode property is accessible', () => {

@@ -44,233 +44,19 @@ import { getMode, type SynthMode, type EngineContext } from './modes';
 // Import beat engine
 import { BeatEngine } from './beats/BeatEngine';
 
-// Types are defined inline below for now (TODO: migrate to ./types)
+// Import types from centralized type definitions
+import type { TouchId, TextureNodes } from './types';
+import type { OrientationParams, NoteInfo, ModeNodes } from './types';
 
-// ============ TYPE DEFINITIONS ============
-
-export type TouchId = number | string;
-
-// Extend Window for Safari AudioContext
+// Declare global webkitAudioContext for Safari compatibility
 declare global {
     interface Window {
         webkitAudioContext: typeof AudioContext;
     }
 }
 
-// Voice types for each synthesis mode
-interface WavetableVoice {
-    osc: OscillatorNode;
-    gain: GainNode;
-    lfo: OscillatorNode;
-    lfoGain: GainNode;
-}
-
-interface DroneVoiceOsc {
-    osc: OscillatorNode;
-    gain: GainNode;
-    interval: number;
-}
-
-interface DroneVoice {
-    oscs: DroneVoiceOsc[];
-    masterGain: GainNode;
-    filterEnv: GainNode;
-    lfo: OscillatorNode;
-    lfoGain: GainNode;
-}
-
-interface FMVoice {
-    carrier: OscillatorNode;
-    carrierGain: GainNode;
-    modulator: OscillatorNode;
-    modulatorGain: GainNode;
-}
-
-interface ArpVoice {
-    osc: OscillatorNode;
-    gain: GainNode;
-    currentStep: number;
-    intervalId: ReturnType<typeof setInterval> | null;
-    pattern: number[];
-    baseFreq: number;
-}
-
-interface KarplusVoice {
-    lastRepluck: number;
-}
-
-interface FormantFilter {
-    filter: BiquadFilterNode;
-    gain: GainNode;
-}
-
-interface FormantVoice {
-    source: OscillatorNode;
-    noiseSource: AudioBufferSourceNode;
-    noiseMix: GainNode;
-    sourceMix: GainNode;
-    formants: FormantFilter[];
-    masterGain: GainNode;
-    currentVowel: string;
-}
-
-interface BassState {
-    osc: OscillatorNode;
-    subOsc: OscillatorNode;
-    gain: GainNode;
-    subGain: GainNode;
-    currentStep: number;
-    intervalId: ReturnType<typeof setTimeout> | null;
-    pattern: number[];
-    baseFreq: number;
-    targetFreq: number;
-    lastTempo: number;
-    isActive: boolean;
-}
-
-interface AmbientDroneOsc {
-    osc: OscillatorNode;
-    gain: GainNode;
-    baseDetune: number;
-}
-
-interface AmbientDroneVoice {
-    oscs: AmbientDroneOsc[];
-    voiceGain: GainNode;
-    panner: StereoPannerNode;
-    baseFreq: number;
-    panBase: number;
-    detunePhase: number;
-    panPhase: number;
-}
-
-interface NoiseBed {
-    source: AudioBufferSourceNode;
-    bandpass: BiquadFilterNode;
-    lowpass: BiquadFilterNode;
-    gain: GainNode;
-    panner: StereoPannerNode;
-    filterPhase: number;
-}
-
-interface ShimmerPartial {
-    osc: OscillatorNode;
-    gain: GainNode;
-    tremolo: OscillatorNode;
-    tremoloGain: GainNode;
-    ratio: number;
-}
-
-interface ShimmerLayer {
-    partials: ShimmerPartial[];
-    masterGain: GainNode;
-}
-
-interface AmbientState {
-    x: number;
-    y: number;
-    targetX: number;
-    targetY: number;
-    microPhase: number;
-    mesoPhase: number;
-    macroPhase: number;
-    walkX: number;
-    walkY: number;
-    walkVelX: number;
-    walkVelY: number;
-    isActive: boolean;
-    touchActive: boolean;
-}
-
-interface OrientationParams {
-    pan: number;
-    filterMod: number;
-    lfoRate: number;
-    shake: number;
-    compass: number;  // Alpha (compass heading) 0-360
-}
-
-// ============ ONEHEART MODE INTERFACES ============
-
-interface OneheartPadOsc {
-    osc: OscillatorNode;
-    gain: GainNode;
-    baseDetune: number;
-    panPosition: number;
-}
-
-interface OneheartPadVoice {
-    oscs: OneheartPadOsc[];
-    voiceGain: GainNode;
-    panner: StereoPannerNode;
-    noteFreq: number;
-    detunePhase: number;
-}
-
-interface OneheartNodes {
-    pads: OneheartPadVoice[];
-    lfoSlow: OscillatorNode;
-    lfoMedium: OscillatorNode;
-    masterGain: GainNode;
-}
-
-interface TextureNodes {
-    noiseBuffer: AudioBuffer;
-    noiseSource: AudioBufferSourceNode | null;
-    gain: GainNode;
-    filter: BiquadFilterNode;
-    filter2?: BiquadFilterNode;  // For bandpass (tape hiss)
-    lfo?: OscillatorNode;        // LFO for wave-like modulation
-    lfoGain?: GainNode;          // LFO depth control
-}
-
-interface NoteInfo {
-    freq: number;
-    semitone: number;
-    noteName: string;
-    octave: number;
-    isQuantized: boolean;
-}
-
-// Node container types
-interface WavetableNodes {
-    voices: Map<TouchId, WavetableVoice>;
-}
-
-interface DroneNodes {
-    voices: Map<TouchId, DroneVoice>;
-}
-
-interface FMNodes {
-    voices: Map<TouchId, FMVoice>;
-    ratio: number;
-}
-
-interface ArpNodes {
-    voices: Map<TouchId, ArpVoice>;
-}
-
-interface KarplusNodes {
-    voices: Map<TouchId, KarplusVoice>;
-    lastPluck: number;
-}
-
-interface FormantNodes {
-    voices: Map<TouchId, FormantVoice>;
-}
-
-interface AmbientNodes {
-    drones: AmbientDroneVoice[];
-    noiseBed: NoiseBed;
-    shimmer: ShimmerLayer;
-    lfoSlow: OscillatorNode;
-    lfoMedium: OscillatorNode;
-    baseFreq: number;
-    currentChordIndex: number;
-    chordTransitionTime: number;
-}
-
-type ModeNodes = WavetableNodes | DroneNodes | FMNodes | ArpNodes | KarplusNodes | FormantNodes | AmbientNodes | OneheartNodes | Record<string, unknown>;
+// Re-export TouchId for backwards compatibility
+export type { TouchId };
 
 // ============ AUDIO ENGINE CLASS ============
 
@@ -292,13 +78,8 @@ export class AudioEngine {
     scaleType = 'minor';
     scale = [0, 3, 5, 7, 10, 12, 15, 17, 19, 22, 24];
     silentAudio: HTMLAudioElement;
-    ambientState: AmbientState | null = null;
-    ambientInterval: ReturnType<typeof setInterval> | null = null;
-    ambientTouchTimeout: ReturnType<typeof setTimeout> | null = null;
-    bassState: BassState | null = null;
-    bassInterval: ReturnType<typeof setInterval> | null = null;
 
-    // Oneheart mode state (now handled by mode classes)
+    // Oneheart mode state (for backwards compatibility)
     oneheartMood: OneheartMood = 'focus';
 
     // Texture state
@@ -460,19 +241,6 @@ export class AudioEngine {
         }
 
         this.updateHUDLabels();
-    }
-
-    private cleanupOscillator(osc: OscillatorNode | null | undefined): void {
-        if (!osc) return;
-        // Disconnect first to remove from audio graph, then stop
-        // This ensures cleanup even if stop() throws (already stopped)
-        try { osc.disconnect(); } catch (e) { /* ignore */ }
-        try { osc.stop(); } catch (e) { /* ignore */ }
-    }
-
-    private cleanupGain(gain: GainNode | null | undefined): void {
-        if (!gain) return;
-        try { gain.disconnect(); } catch (e) { /* ignore */ }
     }
 
     // ============ TOUCH CATEGORY DETECTION ============
@@ -681,117 +449,8 @@ export class AudioEngine {
     }
 
     cleanupMode(): void {
-        if (this.ambientInterval) {
-            clearInterval(this.ambientInterval);
-            this.ambientInterval = null;
-        }
-        if (this.ambientTouchTimeout) {
-            clearTimeout(this.ambientTouchTimeout);
-            this.ambientTouchTimeout = null;
-        }
-        if (this.bassInterval) {
-            clearInterval(this.bassInterval);
-            this.bassInterval = null;
-        }
-
-        // Cleanup oneheart pads
-        if ('pads' in this.nodes && Array.isArray(this.nodes.pads)) {
-            for (const pad of this.nodes.pads as OneheartPadVoice[]) {
-                for (const o of pad.oscs) {
-                    this.cleanupOscillator(o.osc);
-                    this.cleanupGain(o.gain);
-                }
-                this.cleanupGain(pad.voiceGain);
-                try { pad.panner.disconnect(); } catch (e) { /* ignore */ }
-            }
-        }
-        // Cleanup oneheart master gain
-        if ('masterGain' in this.nodes && this.nodes !== null && typeof this.nodes === 'object') {
-            const n = this.nodes as OneheartNodes;
-            if (n.masterGain) this.cleanupGain(n.masterGain);
-        }
-        if (this.bassState) {
-            if (this.bassState.intervalId) {
-                clearTimeout(this.bassState.intervalId);
-            }
-            this.cleanupOscillator(this.bassState.osc);
-            this.cleanupOscillator(this.bassState.subOsc);
-            this.cleanupGain(this.bassState.gain);
-            this.cleanupGain(this.bassState.subGain);
-            this.bassState = null;
-        }
-
-        // Cleanup wavetable/theremin/fm/chords voices
-        if ('voices' in this.nodes && this.nodes.voices instanceof Map) {
-            for (const voice of this.nodes.voices.values()) {
-                const v = voice as Record<string, unknown>;
-                this.cleanupOscillator(v.osc as OscillatorNode);
-                this.cleanupOscillator(v.lfo as OscillatorNode);
-                this.cleanupOscillator(v.vibrato as OscillatorNode);
-                this.cleanupOscillator(v.carrier as OscillatorNode);
-                this.cleanupOscillator(v.modulator as OscillatorNode);
-                this.cleanupGain(v.gain as GainNode);
-                this.cleanupGain(v.lfoGain as GainNode);
-                this.cleanupGain(v.vibratoGain as GainNode);
-                this.cleanupGain(v.carrierGain as GainNode);
-                this.cleanupGain(v.modulatorGain as GainNode);
-
-                // Cleanup oscs arrays (for formant, drone, etc.)
-                if (Array.isArray(v.oscs)) {
-                    for (const o of v.oscs) {
-                        const oscObj = o as { osc?: OscillatorNode; gain?: GainNode };
-                        if (oscObj.osc) this.cleanupOscillator(oscObj.osc);
-                        if (oscObj.gain) this.cleanupGain(oscObj.gain);
-                    }
-                }
-            }
-        }
-
-        // Cleanup ambient mode drones
-        if ('drones' in this.nodes && Array.isArray(this.nodes.drones)) {
-            for (const drone of this.nodes.drones as AmbientDroneVoice[]) {
-                for (const o of drone.oscs) {
-                    this.cleanupOscillator(o.osc);
-                    this.cleanupGain(o.gain);
-                }
-                this.cleanupGain(drone.voiceGain);
-                try { drone.panner.disconnect(); } catch (e) { /* ignore */ }
-            }
-        }
-
-        // Cleanup noise bed
-        if ('noiseBed' in this.nodes && this.nodes.noiseBed) {
-            const nb = this.nodes.noiseBed as NoiseBed;
-            try {
-                nb.source.stop();
-                nb.source.disconnect();
-                nb.bandpass.disconnect();
-                nb.lowpass.disconnect();
-                nb.gain.disconnect();
-                nb.panner.disconnect();
-            } catch (e) { /* ignore */ }
-        }
-
-        // Cleanup shimmer
-        if ('shimmer' in this.nodes && this.nodes.shimmer) {
-            const sh = this.nodes.shimmer as ShimmerLayer;
-            for (const p of sh.partials) {
-                this.cleanupOscillator(p.osc);
-                this.cleanupOscillator(p.tremolo);
-                this.cleanupGain(p.gain);
-                this.cleanupGain(p.tremoloGain);
-            }
-            this.cleanupGain(sh.masterGain);
-        }
-
-        // Cleanup LFOs
-        if ('lfoSlow' in this.nodes) this.cleanupOscillator(this.nodes.lfoSlow as OscillatorNode);
-        if ('lfoMedium' in this.nodes) this.cleanupOscillator(this.nodes.lfoMedium as OscillatorNode);
-        if ('lfo' in this.nodes) this.cleanupOscillator(this.nodes.lfo as OscillatorNode);
-        if ('lfo1' in this.nodes) this.cleanupOscillator(this.nodes.lfo1 as OscillatorNode);
-        if ('lfo2' in this.nodes) this.cleanupOscillator(this.nodes.lfo2 as OscillatorNode);
-        if ('noiseSource' in this.nodes) this.cleanupOscillator(this.nodes.noiseSource as OscillatorNode);
-
+        // Mode classes now handle their own cleanup via cleanup() method
+        // This just resets the shared nodes reference
         this.nodes = {};
     }
 
