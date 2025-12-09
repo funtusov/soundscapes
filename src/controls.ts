@@ -397,26 +397,73 @@ export function initEffectsControls(audio: AudioEngine) {
 }
 
 export function initTextureControls(audio: AudioEngine) {
-    const vinylBtn = document.getElementById('vinylBtn')!;
+    const noiseBtn = document.getElementById('noiseBtn')!;
     const tapeBtn = document.getElementById('tapeBtn')!;
     const volumeSlider = document.getElementById('volumeSlider') as HTMLInputElement;
+    const textureVolumeSlider = document.getElementById('textureVolumeSlider') as HTMLInputElement;
     const textureControls = document.getElementById('textureControls')!;
+
+    // Noise type display names
+    const noiseTypeNames: Record<string, string> = {
+        waves: 'Waves',
+        rain: 'Rain',
+        wind: 'Wind',
+        fire: 'Fire'
+    };
+
+    // Update button text to show current noise type
+    const updateNoiseButtonText = () => {
+        const type = audio.getNoiseType();
+        const isActive = audio.noiseEnabled;
+        noiseBtn.textContent = noiseTypeNames[type] || type;
+        noiseBtn.classList.toggle('active', isActive);
+    };
 
     // Show texture controls only for oneheart mode
     const updateVisibility = () => {
         textureControls.style.display = audio.mode === 'oneheart' ? 'flex' : 'none';
     };
 
-    // Vinyl toggle
-    const handleVinyl = (e: Event) => {
+    // Noise toggle (short press) and cycle type (long press)
+    let pressTimer: ReturnType<typeof setTimeout> | null = null;
+    let isLongPress = false;
+
+    const handleNoiseStart = (e: Event) => {
         e.stopPropagation();
         e.preventDefault();
-        const enabled = audio.toggleVinyl();
-        vinylBtn.classList.toggle('active', enabled);
+        isLongPress = false;
+        pressTimer = setTimeout(() => {
+            isLongPress = true;
+            // Long press: cycle noise type
+            audio.cycleNoiseType();
+            updateNoiseButtonText();
+        }, 500);
     };
 
-    vinylBtn.addEventListener('click', handleVinyl);
-    vinylBtn.addEventListener('touchend', handleVinyl);
+    const handleNoiseEnd = (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
+        if (pressTimer) {
+            clearTimeout(pressTimer);
+            pressTimer = null;
+        }
+        if (!isLongPress) {
+            // Short press: toggle on/off
+            audio.toggleNoise();
+            updateNoiseButtonText();
+        }
+    };
+
+    noiseBtn.addEventListener('mousedown', handleNoiseStart);
+    noiseBtn.addEventListener('mouseup', handleNoiseEnd);
+    noiseBtn.addEventListener('mouseleave', () => {
+        if (pressTimer) {
+            clearTimeout(pressTimer);
+            pressTimer = null;
+        }
+    });
+    noiseBtn.addEventListener('touchstart', handleNoiseStart);
+    noiseBtn.addEventListener('touchend', handleNoiseEnd);
 
     // Tape hiss toggle
     const handleTape = (e: Event) => {
@@ -429,7 +476,19 @@ export function initTextureControls(audio: AudioEngine) {
     tapeBtn.addEventListener('click', handleTape);
     tapeBtn.addEventListener('touchend', handleTape);
 
-    // Volume slider
+    // Texture volume slider
+    textureVolumeSlider.addEventListener('input', (e) => {
+        e.stopPropagation();
+        const value = parseInt(textureVolumeSlider.value, 10) / 100;
+        audio.setTextureVolume(value);
+    });
+
+    // Prevent touch events from propagating to canvas
+    textureVolumeSlider.addEventListener('touchstart', (e) => e.stopPropagation());
+    textureVolumeSlider.addEventListener('touchmove', (e) => e.stopPropagation());
+    textureVolumeSlider.addEventListener('touchend', (e) => e.stopPropagation());
+
+    // Master volume slider
     volumeSlider.addEventListener('input', (e) => {
         e.stopPropagation();
         const value = parseInt(volumeSlider.value, 10);
@@ -441,8 +500,9 @@ export function initTextureControls(audio: AudioEngine) {
     volumeSlider.addEventListener('touchmove', (e) => e.stopPropagation());
     volumeSlider.addEventListener('touchend', (e) => e.stopPropagation());
 
-    // Initialize visibility
+    // Initialize visibility and button state
     updateVisibility();
+    updateNoiseButtonText();
 
     // Update visibility when mode changes (via MutationObserver on mode select)
     const modeSelect = document.getElementById('modeSelect');

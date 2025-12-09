@@ -78,8 +78,12 @@
 
     <!-- Texture Controls (for Oneheart/Focus mode) -->
     <div class="texture-controls" id="textureControls" style="display: none;">
-        <button class="texture-btn" id="vinylBtn">Vinyl</button>
+        <button class="texture-btn" id="noiseBtn">Waves</button>
         <button class="texture-btn" id="tapeBtn">Tape</button>
+        <div class="volume-control">
+            <span class="volume-label">Tex</span>
+            <input type="range" id="textureVolumeSlider" min="0" max="100" value="70" class="volume-slider">
+        </div>
         <div class="volume-control">
             <span class="volume-label">Vol</span>
             <input type="range" id="volumeSlider" min="0" max="100" value="70" class="volume-slider">
@@ -92,13 +96,11 @@
         <select class="mode-select" id="modeSelect">
             <option value="oneheart">Focus</option>
             <option value="wavetable">Wave</option>
-            <option value="drone">Drone</option>
             <option value="fm">FM</option>
             <option value="arpeggiator">Arp</option>
             <option value="karplus">String</option>
             <option value="formant">Voice</option>
             <option value="ambient">Ambient</option>
-            <option value="bassline">Bass</option>
         </select>
     </div>
 

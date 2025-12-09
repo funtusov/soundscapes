@@ -70,8 +70,11 @@ import {
     ONEHEART_PRESETS,
     type OneheartMood,
     // Texture imports
-    VINYL_SETTINGS,
+    NOISE_TEXTURE_SETTINGS,
+    NOISE_TYPES,
+    DEFAULT_TEXTURE_VOLUME,
     TAPE_HISS_SETTINGS,
+    type NoiseType,
 } from './constants';
 
 // ============ TYPE DEFINITIONS ============
@@ -349,10 +352,12 @@ export class AudioEngine {
     oneheartMood: OneheartMood = 'focus';
 
     // Texture state
-    vinylNodes: TextureNodes | null = null;
+    noiseNodes: TextureNodes | null = null;
     tapeHissNodes: TextureNodes | null = null;
-    vinylEnabled = false;
+    noiseEnabled = false;
     tapeHissEnabled = false;
+    noiseType: NoiseType = 'waves';
+    textureVolume = DEFAULT_TEXTURE_VOLUME;
 
     // Buffer pool for Karplus-Strong to avoid repeated allocations
     private karplusBufferPool: PooledBuffer[] = [];
@@ -2334,25 +2339,84 @@ export class AudioEngine {
         return buffer;
     }
 
-    toggleVinyl(): boolean {
-        if (!this.ctx || !this.filter) return this.vinylEnabled;
+    toggleNoise(): boolean {
+        if (!this.ctx || !this.filter) return this.noiseEnabled;
 
-        if (this.vinylEnabled) {
+        if (this.noiseEnabled) {
             // Turn off
-            this.stopVinyl();
-            this.vinylEnabled = false;
+            this.stopNoise();
+            this.noiseEnabled = false;
         } else {
             // Turn on
-            this.startVinyl();
-            this.vinylEnabled = true;
+            this.startNoise();
+            this.noiseEnabled = true;
         }
 
-        return this.vinylEnabled;
+        return this.noiseEnabled;
     }
 
-    private startVinyl(): void {
+    cycleNoiseType(): NoiseType {
+        const currentIndex = NOISE_TYPES.indexOf(this.noiseType);
+        const nextIndex = (currentIndex + 1) % NOISE_TYPES.length;
+        this.noiseType = NOISE_TYPES[nextIndex];
+
+        // If noise is playing, restart with new type
+        if (this.noiseEnabled) {
+            this.stopNoise();
+            this.startNoise();
+        }
+
+        return this.noiseType;
+    }
+
+    setNoiseType(type: NoiseType): void {
+        if (this.noiseType === type) return;
+        this.noiseType = type;
+
+        // If noise is playing, restart with new type
+        if (this.noiseEnabled) {
+            this.stopNoise();
+            this.startNoise();
+        }
+    }
+
+    getNoiseType(): NoiseType {
+        return this.noiseType;
+    }
+
+    setTextureVolume(volume: number): void {
+        this.textureVolume = Math.max(0, Math.min(1, volume));
+
+        // Update noise volume if playing
+        if (this.noiseNodes && this.ctx) {
+            const settings = NOISE_TEXTURE_SETTINGS[this.noiseType];
+            const baseGain = settings.baseGain * this.textureVolume;
+            const now = this.ctx.currentTime;
+            this.noiseNodes.gain.gain.setTargetAtTime(baseGain * (1 - settings.lfoDepth), now, 0.1);
+            if (this.noiseNodes.lfoGain) {
+                this.noiseNodes.lfoGain.gain.setTargetAtTime(baseGain * settings.lfoDepth, now, 0.1);
+            }
+        }
+
+        // Update tape hiss volume if playing
+        if (this.tapeHissNodes && this.ctx) {
+            const baseGain = TAPE_HISS_SETTINGS.baseGain * this.textureVolume;
+            const now = this.ctx.currentTime;
+            this.tapeHissNodes.gain.gain.setTargetAtTime(baseGain * (1 - TAPE_HISS_SETTINGS.lfoDepth), now, 0.1);
+            if (this.tapeHissNodes.lfoGain) {
+                this.tapeHissNodes.lfoGain.gain.setTargetAtTime(baseGain * TAPE_HISS_SETTINGS.lfoDepth, now, 0.1);
+            }
+        }
+    }
+
+    getTextureVolume(): number {
+        return this.textureVolume;
+    }
+
+    private startNoise(): void {
         if (!this.ctx || !this.filter) return;
 
+        const settings = NOISE_TEXTURE_SETTINGS[this.noiseType];
         const noiseBuffer = this.createNoiseBuffer(4);
 
         // Create noise source
@@ -2361,56 +2425,57 @@ export class AudioEngine {
         noiseSource.loop = true;
 
         // Create filter (lowpass for warmer sound)
-        const vinylFilter = this.ctx.createBiquadFilter();
-        vinylFilter.type = 'lowpass';
-        vinylFilter.frequency.value = VINYL_SETTINGS.filterFreq;
-        vinylFilter.Q.value = 0.7;
+        const noiseFilter = this.ctx.createBiquadFilter();
+        noiseFilter.type = 'lowpass';
+        noiseFilter.frequency.value = settings.filterFreq;
+        noiseFilter.Q.value = 0.7;
 
-        // Create gain node
-        const vinylGain = this.ctx.createGain();
-        vinylGain.gain.value = VINYL_SETTINGS.baseGain * (1 - VINYL_SETTINGS.lfoDepth);
+        // Create gain node with texture volume applied
+        const baseGain = settings.baseGain * this.textureVolume;
+        const noiseGain = this.ctx.createGain();
+        noiseGain.gain.value = baseGain * (1 - settings.lfoDepth);
 
-        // Create LFO for wave-like modulation (ocean wave effect)
+        // Create LFO for wave-like modulation
         const lfo = this.ctx.createOscillator();
         lfo.type = 'sine';
-        lfo.frequency.value = VINYL_SETTINGS.lfoRate;
+        lfo.frequency.value = settings.lfoRate;
 
         // LFO gain controls modulation depth
         const lfoGain = this.ctx.createGain();
-        lfoGain.gain.value = VINYL_SETTINGS.baseGain * VINYL_SETTINGS.lfoDepth;
+        lfoGain.gain.value = baseGain * settings.lfoDepth;
 
         // Connect LFO to gain's gain parameter for amplitude modulation
         lfo.connect(lfoGain);
-        lfoGain.connect(vinylGain.gain);
+        lfoGain.connect(noiseGain.gain);
 
         // Connect: noise -> filter -> gain -> master filter
-        noiseSource.connect(vinylFilter);
-        vinylFilter.connect(vinylGain);
-        vinylGain.connect(this.filter);
+        noiseSource.connect(noiseFilter);
+        noiseFilter.connect(noiseGain);
+        noiseGain.connect(this.filter);
 
         noiseSource.start();
         lfo.start();
 
-        this.vinylNodes = {
+        this.noiseNodes = {
             noiseBuffer,
             noiseSource,
-            gain: vinylGain,
-            filter: vinylFilter,
+            gain: noiseGain,
+            filter: noiseFilter,
             lfo,
             lfoGain
         };
     }
 
-    private stopVinyl(): void {
-        if (!this.vinylNodes || !this.ctx) return;
+    private stopNoise(): void {
+        if (!this.noiseNodes || !this.ctx) return;
 
         const now = this.ctx.currentTime;
 
         // Fade out
-        this.vinylNodes.gain.gain.setTargetAtTime(0, now, 0.3);
+        this.noiseNodes.gain.gain.setTargetAtTime(0, now, 0.3);
 
         // Stop after fade
-        const nodes = this.vinylNodes;
+        const nodes = this.noiseNodes;
         setTimeout(() => {
             if (nodes.noiseSource) {
                 try {
@@ -2436,7 +2501,7 @@ export class AudioEngine {
             } catch (e) { /* ignore */ }
         }, 500);
 
-        this.vinylNodes = null;
+        this.noiseNodes = null;
     }
 
     toggleTapeHiss(): boolean {
