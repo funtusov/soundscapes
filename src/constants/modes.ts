@@ -203,6 +203,14 @@ export const ONEHEART_REVERB = {
     damping: 0.5
 } as const;
 
+/** Relaxation mode reverb (longer, wetter) */
+export const RELAXATION_REVERB = {
+    decay: 8.0,
+    wet: 0.75,
+    dry: 0.4,
+    damping: 0.6
+} as const;
+
 /** Focus mode preset */
 export const FOCUS_PRESET = {
     chords: ONEHEART_FOCUS_CHORDS,
@@ -220,13 +228,19 @@ export const FOCUS_PRESET = {
 export const RELAXATION_PRESET = {
     chords: ONEHEART_RELAXATION_CHORDS,
     chordDuration: 35000,
-    filterRange: [300, 2000] as const,
-    textureLevel: 0.15,
+    filterRange: [200, 1800] as const,
+    textureLevel: 0.25,
     reverbDecay: 8.0,
-    evolutionSpeed: 0.7,
-    brightness: 0.5,
+    evolutionSpeed: 0.6,
+    brightness: 0.4,
     padCount: 4,
-    detuneAmount: 12,
+    detuneAmount: 15,
+    // Depth control ranges (X-axis)
+    depthReverbRange: [0.5, 0.85] as const,  // wet mix range
+    depthFilterMult: [1.0, 0.4] as const,    // filter multiplier (gets darker)
+    // Drift control ranges (Y-axis)
+    driftLfoDepth: [0.3, 1.0] as const,      // LFO modulation depth
+    driftStereoWidth: [0.3, 1.0] as const,   // stereo movement amount
 } as const;
 
 /** Sleep mode preset */

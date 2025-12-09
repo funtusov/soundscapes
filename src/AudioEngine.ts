@@ -67,6 +67,7 @@ import {
     ONEHEART_LFO_SLOW,
     ONEHEART_LFO_MEDIUM,
     ONEHEART_REVERB,
+    RELAXATION_REVERB,
     ONEHEART_PRESETS,
     type OneheartMood,
     // Texture imports
@@ -331,7 +332,7 @@ export class AudioEngine {
     analyser: AnalyserNode | null = null;
     isPlaying = false;
     dataArray: Float32Array | null = null;
-    mode: SynthesisMode = 'oneheart';
+    mode: SynthesisMode = 'focus';
     nodes: ModeNodes = {};
     touches = new Map<TouchId, unknown>();
     orientationParams: OrientationParams = { pan: 0, filterMod: 0, lfoRate: 0, shake: 0, compass: 0 };
@@ -350,6 +351,18 @@ export class AudioEngine {
     oneheartState: OneheartState | null = null;
     oneheartInterval: ReturnType<typeof setInterval> | null = null;
     oneheartMood: OneheartMood = 'focus';
+
+    // Oneheart touch parameters
+    private oneheartTargetNoiseMix = 0;     // Focus: X = texture
+    private oneheartCurrentNoiseMix = 0;
+    private oneheartTargetVoicing = 1.0;    // Focus: Y = voicing
+    private oneheartCurrentVoicing = 1.0;
+    private oneheartTargetDepth = 0;        // Relaxation: X = depth
+    private oneheartCurrentDepth = 0;
+    private oneheartTargetDrift = 0.3;      // Relaxation: Y = drift
+    private oneheartCurrentDrift = 0.3;
+    private oneheartIsTouching = false;
+    private oneheartNoisePhase = 0;
 
     // Texture state
     noiseNodes: TextureNodes | null = null;
@@ -477,7 +490,14 @@ export class AudioEngine {
             case 'formant': this.initFormant(); break;
             case 'ambient': this.initAmbient(); break;
             case 'bassline': this.initBassline(); break;
-            case 'oneheart': this.initOneheart(); break;
+            case 'focus':
+                this.oneheartMood = 'focus';
+                this.initOneheart();
+                break;
+            case 'relaxation':
+                this.oneheartMood = 'relaxation';
+                this.initOneheart();
+                break;
         }
 
         this.updateHUDLabels();
@@ -716,6 +736,13 @@ export class AudioEngine {
         const nextLevel = REVERB_CYCLE[nextIndex];
         this.setReverbLevel(nextLevel);
         return nextLevel;
+    }
+
+    /** Set reverb wet mix directly (for relaxation depth control) */
+    setReverbWet(wet: number): void {
+        if (!this.ctx || !this.reverbWetGain) return;
+        const now = this.ctx.currentTime;
+        this.reverbWetGain.gain.setTargetAtTime(clamp(wet, 0, 1), now, 0.3);
     }
 
     cleanupMode(): void {
@@ -2096,6 +2123,14 @@ export class AudioEngine {
 
         // Set long reverb for Oneheart mode
         this.setOneheartReverb();
+        this.reverbLevel = 'on'; // Mark reverb as active for UI
+
+        // Enable waves noise by default with low texture volume
+        this.textureVolume = 0.2; // 20% texture volume
+        if (!this.noiseEnabled) {
+            this.startNoise();
+            this.noiseEnabled = true;
+        }
 
         // Start the evolution loop
         this.startOneheartLoop();
@@ -2170,14 +2205,17 @@ export class AudioEngine {
     private setOneheartReverb(): void {
         if (!this.ctx || !this.convolver || !this.reverbWetGain || !this.reverbDryGain) return;
 
-        // Generate longer impulse response for Oneheart mode
-        const ir = this.generateImpulseResponse(ONEHEART_REVERB.decay);
+        // Select reverb based on mood (relaxation has longer, wetter reverb)
+        const reverb = this.oneheartMood === 'relaxation' ? RELAXATION_REVERB : ONEHEART_REVERB;
+
+        // Generate impulse response for selected reverb
+        const ir = this.generateImpulseResponse(reverb.decay);
         this.convolver.buffer = ir;
 
         // Set wet/dry mix
         const now = this.ctx.currentTime;
-        this.reverbWetGain.gain.setTargetAtTime(ONEHEART_REVERB.wet, now, 0.5);
-        this.reverbDryGain.gain.setTargetAtTime(ONEHEART_REVERB.dry, now, 0.5);
+        this.reverbWetGain.gain.setTargetAtTime(reverb.wet, now, 0.5);
+        this.reverbDryGain.gain.setTargetAtTime(reverb.dry, now, 0.5);
     }
 
     private startOneheartLoop(): void {
@@ -2205,7 +2243,7 @@ export class AudioEngine {
 
         // Start the evolution loop
         this.oneheartInterval = setInterval(() => {
-            if (this.mode !== 'oneheart' || !this.ctx) {
+            if ((this.mode !== 'focus' && this.mode !== 'relaxation') || !this.ctx) {
                 if (this.oneheartInterval) clearInterval(this.oneheartInterval);
                 return;
             }
@@ -2221,10 +2259,23 @@ export class AudioEngine {
         const nodes = this.nodes as OneheartNodes;
         const preset = ONEHEART_PRESETS[this.oneheartMood];
         const dt = ONEHEART_LOOP_INTERVAL / 1000;
+        const isRelaxation = this.oneheartMood === 'relaxation';
 
         // Update evolution phase (slow sine wave for breathing effect)
         state.evolutionPhase += dt * 0.1 * preset.evolutionSpeed;
         state.filterPhase += dt * 0.05;
+        this.oneheartNoisePhase += dt * 0.15;
+
+        // Smoothly interpolate parameters based on mood
+        const interpSpeed = this.oneheartIsTouching ? 0.08 : 0.02;
+
+        if (isRelaxation) {
+            this.oneheartCurrentDepth += (this.oneheartTargetDepth - this.oneheartCurrentDepth) * interpSpeed;
+            this.oneheartCurrentDrift += (this.oneheartTargetDrift - this.oneheartCurrentDrift) * interpSpeed;
+        } else {
+            this.oneheartCurrentNoiseMix += (this.oneheartTargetNoiseMix - this.oneheartCurrentNoiseMix) * interpSpeed;
+            this.oneheartCurrentVoicing += (this.oneheartTargetVoicing - this.oneheartCurrentVoicing) * interpSpeed;
+        }
 
         // Check if it's time for a chord change
         const timeSinceChordChange = Date.now() - state.lastChordChange;
@@ -2232,16 +2283,20 @@ export class AudioEngine {
             this.triggerOneheartChordChange();
         }
 
-        // Evolve pad voices
-        const breatheMod = 0.85 + Math.sin(state.evolutionPhase) * 0.15;
+        // Calculate drift-influenced modulation depth for relaxation
+        const driftMod = isRelaxation ? this.oneheartCurrentDrift : 0.5;
+        const breatheAmount = 0.1 + driftMod * 0.15;
+        const breatheMod = 1 - breatheAmount + Math.sin(state.evolutionPhase) * breatheAmount;
 
         nodes.pads.forEach((pad, padIndex) => {
-            // Slowly evolve detune for organic movement
-            pad.detunePhase += dt * (0.08 + padIndex * 0.02);
+            // Slowly evolve detune for organic movement (faster with drift)
+            const detuneSpeed = isRelaxation ? 0.05 + this.oneheartCurrentDrift * 0.1 : 0.08;
+            pad.detunePhase += dt * (detuneSpeed + padIndex * 0.02);
 
             pad.oscs.forEach((o, oscIndex) => {
-                // Subtle detune drift
-                const detuneDrift = Math.sin(pad.detunePhase + oscIndex * 1.5) * 2;
+                // Detune drift (more with relaxation drift)
+                const detuneDriftAmount = isRelaxation ? 2 + this.oneheartCurrentDrift * 4 : 2;
+                const detuneDrift = Math.sin(pad.detunePhase + oscIndex * 1.5) * detuneDriftAmount;
                 o.osc.detune.setTargetAtTime(o.baseDetune + detuneDrift, now, 0.5);
 
                 // Subtle gain modulation (breathing)
@@ -2250,14 +2305,13 @@ export class AudioEngine {
                 o.gain.gain.setTargetAtTime(modGain, now, 0.3);
             });
 
-            // Subtle panning drift
-            const panDrift = Math.sin(pad.detunePhase * 0.3) * 0.1;
-            const basePan = (padIndex / (nodes.pads.length - 1)) * 1.2 - 0.6;
-            pad.panner.pan.setTargetAtTime(
-                clamp(basePan + panDrift, -1, 1),
-                now,
-                0.5
-            );
+            // Panning drift (more stereo movement with drift)
+            const panDriftAmount = isRelaxation ? 0.1 + this.oneheartCurrentDrift * 0.2 : 0.1;
+            const panDrift = Math.sin(pad.detunePhase * 0.3) * panDriftAmount;
+            const basePan = nodes.pads.length > 1
+                ? (padIndex / (nodes.pads.length - 1)) * 1.2 - 0.6
+                : 0;
+            pad.panner.pan.setTargetAtTime(clamp(basePan + panDrift, -1, 1), now, 0.5);
         });
 
         // Evolve filter (slow sweep)
@@ -2265,19 +2319,53 @@ export class AudioEngine {
             const filterRange = preset.filterRange[1] - preset.filterRange[0];
             const filterCenter = preset.filterRange[0] + filterRange / 2;
             const filterMod = Math.sin(state.filterPhase) * filterRange * 0.3;
-            const targetFilter = filterCenter + filterMod;
+            let targetFilter = filterCenter + filterMod;
+
+            // Relaxation: depth darkens the filter
+            if (isRelaxation && 'depthFilterMult' in preset) {
+                const depthPreset = preset as typeof preset & { depthFilterMult: readonly [number, number] };
+                const filterMult = depthPreset.depthFilterMult[0] +
+                    this.oneheartCurrentDepth * (depthPreset.depthFilterMult[1] - depthPreset.depthFilterMult[0]);
+                targetFilter *= filterMult;
+            }
 
             // Also consider device tilt for filter control
             const tiltFactor = 1 - this.orientationParams.filterMod;
             const finalFilter = preset.filterRange[0] + (targetFilter - preset.filterRange[0]) * tiltFactor;
 
-            this.filter.frequency.setTargetAtTime(finalFilter, now, 0.5);
+            this.filter.frequency.setTargetAtTime(clamp(finalFilter, preset.filterRange[0], preset.filterRange[1]), now, 0.5);
         }
 
-        // Update HUD
-        const chordNames = ['I', 'IV', 'vi', 'V', 'iii', 'ii', 'Vsus', 'Iadd9'];
+        // Relaxation: depth affects reverb wet mix
+        if (isRelaxation && 'depthReverbRange' in preset) {
+            const depthPreset = preset as typeof preset & { depthReverbRange: readonly [number, number] };
+            const wetMix = depthPreset.depthReverbRange[0] +
+                this.oneheartCurrentDepth * (depthPreset.depthReverbRange[1] - depthPreset.depthReverbRange[0]);
+            this.setReverbWet(wetMix);
+        }
+
+        // Update HUD based on mood
+        this.updateOneheartHUD(state);
+    }
+
+    private updateOneheartHUD(state: OneheartState): void {
+        const isRelaxation = this.oneheartMood === 'relaxation';
+        const chordNames = isRelaxation
+            ? ['sus4', 'Fsus', 'Gsus', 'add9', 'Am7']
+            : ['I', 'IV', 'vi', 'V', 'iii', 'ii', 'Vsus', 'Iadd9'];
         const chordName = chordNames[state.currentChordIndex % chordNames.length] || 'I';
-        this.updateHUD('Focus', chordName + ' ○');
+
+        if (isRelaxation) {
+            const depthPercent = Math.round(this.oneheartCurrentDepth * 100);
+            const depthStr = depthPercent < 20 ? 'surface' : depthPercent > 70 ? 'deep' : `${depthPercent}%`;
+            const driftStr = this.oneheartCurrentDrift < 0.4 ? 'still' : this.oneheartCurrentDrift > 0.7 ? 'flowing' : 'gentle';
+            this.updateHUD(`Relax ${depthStr}`, `${chordName} ${driftStr}`);
+        } else {
+            const noisePercent = Math.round(this.oneheartCurrentNoiseMix * 100);
+            const noiseStr = noisePercent === 0 ? 'clean' : `tex ${noisePercent}%`;
+            const voicingStr = this.oneheartCurrentVoicing < 0.8 ? 'tight' : this.oneheartCurrentVoicing > 1.2 ? 'wide' : 'med';
+            this.updateHUD(`Focus ${noiseStr}`, `${chordName} ${voicingStr}`);
+        }
     }
 
     private triggerOneheartChordChange(): void {
@@ -2309,15 +2397,44 @@ export class AudioEngine {
         });
     }
 
-    private updateOneheart(): void {
-        // Called on touch - trigger a chord change
+    private updateOneheart(x?: number, y?: number, duration?: number): void {
         if (!this.oneheartState || !this.ctx) return;
 
-        // Only trigger chord change if enough time has passed (prevent spam)
-        const timeSinceChange = Date.now() - this.oneheartState.lastChordChange;
-        if (timeSinceChange > 2000) { // At least 2 seconds between manual changes
-            this.triggerOneheartChordChange();
+        this.oneheartIsTouching = true;
+
+        // Handle X/Y parameters based on mood
+        if (x !== undefined && y !== undefined) {
+            if (this.oneheartMood === 'relaxation') {
+                // Relaxation: X = depth, Y = drift
+                this.oneheartTargetDepth = x;
+                this.oneheartTargetDrift = y;
+            } else {
+                // Focus: X = texture, Y = voicing
+                this.oneheartTargetNoiseMix = x;
+                this.oneheartTargetVoicing = 0.5 + y; // 0.5 to 1.5 range
+            }
         }
+
+        // Trigger chord change on initial touch
+        if (duration !== undefined && duration < 0.1) {
+            const timeSinceChange = Date.now() - this.oneheartState.lastChordChange;
+            if (timeSinceChange > 2000) {
+                this.triggerOneheartChordChange();
+            }
+        }
+    }
+
+    /** Set mood for oneheart mode - now deprecated, use initMode('focus') or initMode('relaxation') */
+    setOneheartMood(mood: OneheartMood): void {
+        // Mood is now set by selecting mode directly
+        // This method is kept for backwards compatibility but switches mode instead
+        if (this.oneheartMood === mood) return;
+        const newMode = mood === 'focus' ? 'focus' : 'relaxation';
+        this.initMode(newMode);
+    }
+
+    getOneheartMood(): OneheartMood {
+        return this.oneheartMood;
     }
 
     // ============ TEXTURE GENERATORS ============
@@ -2647,10 +2764,12 @@ export class AudioEngine {
             formant: ['X: Pitch | β: Cutoff', 'Y: Vowel | γ: Q'],
             ambient: ['X: Drift | β: Cutoff', 'Y: Bright | Tap: Chord'],
             bassline: ['X: Root | α: Tempo', 'Y: Pattern | Compass'],
-            oneheart: ['Tap: Change chord', 'Focus Mode | β: Filter']
+            focus: ['X: Texture | Y: Voicing', 'Focus Mode | Tap: Chord'],
+            relaxation: ['X: Depth | Y: Drift', 'Relax Mode | Tap: Chord']
         };
 
         const l = labels[this.mode];
+
         const blEl = document.getElementById('hud-bl');
         const brEl = document.getElementById('hud-br');
         if (blEl) blEl.innerText = l[0];
@@ -2714,8 +2833,8 @@ export class AudioEngine {
 
         const now = this.ctx!.currentTime;
 
-        // Ambient, Bassline, and Oneheart are continuous modes - they manage their own master gain
-        if (this.mode === 'ambient' || this.mode === 'bassline' || this.mode === 'oneheart') {
+        // Ambient, Bassline, Focus, and Relaxation are continuous modes - they manage their own master gain
+        if (this.mode === 'ambient' || this.mode === 'bassline' || this.mode === 'focus' || this.mode === 'relaxation') {
             return;
         }
 
@@ -2729,7 +2848,11 @@ export class AudioEngine {
         if (!this.ctx) return;
         const now = this.ctx.currentTime;
 
-        if (this.mode === 'ambient' || this.mode === 'oneheart') return;
+        if (this.mode === 'ambient') return;
+        if (this.mode === 'focus' || this.mode === 'relaxation') {
+            this.oneheartIsTouching = false;
+            return;
+        }
 
         // Get touch category and profile for release shaping
         const category = this.getTouchCategory(duration);
@@ -2774,7 +2897,8 @@ export class AudioEngine {
             case 'formant': this.updateFormant(clampedX, clampedY, duration, touchId); break;
             case 'ambient': this.updateAmbient(clampedX, clampedY, duration); break;
             case 'bassline': this.updateBassline(clampedX, clampedY); break;
-            case 'oneheart': this.updateOneheart(); break;
+            case 'focus':
+            case 'relaxation': this.updateOneheart(clampedX, clampedY, duration); break;
         }
     }
 

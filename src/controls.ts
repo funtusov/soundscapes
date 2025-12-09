@@ -394,6 +394,14 @@ export function initEffectsControls(audio: AudioEngine) {
 
     // Initialize button state
     updateReverbButton();
+
+    // Update button state when mode changes (oneheart enables reverb by default)
+    const modeSelect = document.getElementById('modeSelect');
+    if (modeSelect) {
+        modeSelect.addEventListener('change', () => {
+            setTimeout(updateReverbButton, 100);
+        });
+    }
 }
 
 export function initTextureControls(audio: AudioEngine) {
@@ -419,9 +427,10 @@ export function initTextureControls(audio: AudioEngine) {
         noiseBtn.classList.toggle('active', isActive);
     };
 
-    // Show texture controls only for oneheart mode
+    // Show texture controls for focus and relaxation modes
     const updateVisibility = () => {
-        textureControls.style.display = audio.mode === 'oneheart' ? 'flex' : 'none';
+        const showTextures = audio.mode === 'focus' || audio.mode === 'relaxation';
+        textureControls.style.display = showTextures ? 'flex' : 'none';
     };
 
     // Noise toggle (short press) and cycle type (long press)
@@ -500,15 +509,24 @@ export function initTextureControls(audio: AudioEngine) {
     volumeSlider.addEventListener('touchmove', (e) => e.stopPropagation());
     volumeSlider.addEventListener('touchend', (e) => e.stopPropagation());
 
-    // Initialize visibility and button state
-    updateVisibility();
-    updateNoiseButtonText();
+    // Sync UI state with audio engine state
+    const syncUIState = () => {
+        updateVisibility();
+        updateNoiseButtonText();
+        tapeBtn.classList.toggle('active', audio.tapeHissEnabled);
 
-    // Update visibility when mode changes (via MutationObserver on mode select)
+        // Sync slider values with engine state
+        textureVolumeSlider.value = String(Math.round(audio.getTextureVolume() * 100));
+    };
+
+    // Initialize visibility and button state
+    syncUIState();
+
+    // Update visibility and state when mode changes
     const modeSelect = document.getElementById('modeSelect');
     if (modeSelect) {
         modeSelect.addEventListener('change', () => {
-            setTimeout(updateVisibility, 50);
+            setTimeout(syncUIState, 100);
         });
     }
 }

@@ -76,17 +76,17 @@
         <button class="effect-btn" id="reverbBtn">Reverb: Off</button>
     </div>
 
-    <!-- Texture Controls (for Oneheart/Focus mode) -->
+    <!-- Texture Controls (for Focus/Relaxation modes) -->
     <div class="texture-controls" id="textureControls" style="display: none;">
         <button class="texture-btn" id="noiseBtn">Waves</button>
         <button class="texture-btn" id="tapeBtn">Tape</button>
         <div class="volume-control">
             <span class="volume-label">Tex</span>
-            <input type="range" id="textureVolumeSlider" min="0" max="100" value="70" class="volume-slider">
+            <input type="range" id="textureVolumeSlider" min="0" max="100" value="20" class="volume-slider">
         </div>
         <div class="volume-control">
             <span class="volume-label">Vol</span>
-            <input type="range" id="volumeSlider" min="0" max="100" value="70" class="volume-slider">
+            <input type="range" id="volumeSlider" min="0" max="100" value="100" class="volume-slider">
         </div>
     </div>
 
@@ -94,7 +94,8 @@
     <div class="mode-selector" id="modeSelector" style="display: none;">
         <label class="mode-label">Mode:</label>
         <select class="mode-select" id="modeSelect">
-            <option value="oneheart">Focus</option>
+            <option value="focus">Focus</option>
+            <option value="relaxation">Relax</option>
             <option value="wavetable">Wave</option>
             <option value="fm">FM</option>
             <option value="arpeggiator">Arp</option>

@@ -30,6 +30,8 @@ export interface EngineContext {
     updateHUD: (freq: string, harm: string) => void;
     // Reverb control callback (for Oneheart mode)
     setReverb?: (decay: number, wet: number, dry: number) => void;
+    // Reverb wet mix control (for relaxation depth control)
+    setReverbWet?: (wet: number) => void;
 }
 
 // Re-export constants for modes to use

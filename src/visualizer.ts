@@ -893,7 +893,8 @@ export function animate(audio: AudioEngine) {
         case 'karplus': drawKarplusZones(); break;
         case 'formant': drawFormantZones(); break;
         case 'ambient': drawAmbientZones(); break;
-        case 'oneheart': drawOneheartOverlay(); break;
+        case 'focus':
+        case 'relaxation': drawOneheartOverlay(); break;
     }
 
     drawGrid();

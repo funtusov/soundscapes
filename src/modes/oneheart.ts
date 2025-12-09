@@ -1,11 +1,17 @@
 /**
- * Oneheart Mode (Focus/Ambient Pad)
+ * Oneheart Mode (Focus/Relaxation Ambient Pad)
  *
  * Continuous ambient pad generator inspired by Oneheart's focus music.
  * Warm, evolving pads with slow chord changes and rich detuning.
  *
- * X-axis: Pitch (transpose chord up/down)
- * Y-axis: Voicing (tight/close to open/wide spread)
+ * Focus mode:
+ *   X-axis: Texture (clean to textured with waves/tape blend)
+ *   Y-axis: Voicing (tight/close to open/wide spread)
+ *
+ * Relaxation mode:
+ *   X-axis: Depth (surface/dry to deep/wet with darker filter)
+ *   Y-axis: Drift (still to flowing with more LFO movement)
+ *
  * Touch triggers chord transitions.
  */
 
@@ -23,28 +29,46 @@ import {
     ONEHEART_LOOP_INTERVAL,
     ONEHEART_MASTER_GAIN,
     ONEHEART_REVERB,
+    RELAXATION_REVERB,
     ONEHEART_PRESETS,
     type OneheartMood,
     clamp,
 } from '../constants';
+
+// Internal noise texture nodes
+interface NoiseLayer {
+    source: AudioBufferSourceNode;
+    filter: BiquadFilterNode;
+    gain: GainNode;
+    lfo: OscillatorNode;
+    lfoGain: GainNode;
+}
 
 interface OneheartNodes {
     pads: OneheartPadVoice[];
     lfoSlow: OscillatorNode;
     lfoMedium: OscillatorNode;
     masterGain: GainNode;
+    // Noise textures
+    wavesNoise: NoiseLayer | null;
+    tapeNoise: NoiseLayer | null;
 }
-
-// Pitch range in semitones (X-axis controls transpose)
-const PITCH_RANGE_SEMITONES = 12; // -12 to +12 semitones (2 octaves)
 
 // Voicing spread multiplier range (Y-axis controls how spread out the chord is)
 const VOICING_TIGHT = 0.5;  // Tight voicing (intervals compressed)
 const VOICING_WIDE = 1.5;   // Wide voicing (intervals expanded)
 
+// Noise settings
+const WAVES_GAIN = 0.025;   // Max waves noise level
+const TAPE_GAIN = 0.018;    // Max tape noise level
+const WAVES_FILTER = 2000;  // Waves lowpass frequency
+const TAPE_FILTER_LOW = 1500;  // Tape highpass
+const TAPE_FILTER_HIGH = 5000; // Tape lowpass
+const WAVES_LFO_RATE = 0.08;   // Slow wave modulation
+const TAPE_LFO_RATE = 0.12;    // Slightly faster tape flutter
+
 export class OneheartMode extends BaseSynthMode {
     readonly name = 'oneheart';
-    readonly hudLabels: [string, string] = ['X: Pitch', 'Y: Voicing'];
     readonly isContinuous = true;
 
     private nodes: OneheartNodes | null = null;
@@ -53,12 +77,27 @@ export class OneheartMode extends BaseSynthMode {
     private engineRef: EngineContext | null = null;
     private mood: OneheartMood = 'focus';
 
-    // Touch-controlled parameters
-    private targetPitchOffset = 0;  // Semitones offset from base
-    private currentPitchOffset = 0; // Smoothly interpolated
+    // Focus mode parameters (X: texture, Y: voicing)
+    private targetNoiseMix = 0;     // 0 = clean, 1 = full noise
+    private currentNoiseMix = 0;    // Smoothly interpolated
     private targetVoicing = 1.0;    // Voicing spread multiplier
     private currentVoicing = 1.0;   // Smoothly interpolated
+
+    // Relaxation mode parameters (X: depth, Y: drift)
+    private targetDepth = 0;        // 0 = surface, 1 = deep
+    private currentDepth = 0;       // Smoothly interpolated
+    private targetDrift = 0.3;      // 0 = still, 1 = flowing
+    private currentDrift = 0.3;     // Smoothly interpolated
+
     private isTouching = false;
+    private noisePhase = 0;         // For modulating between wave/tape blend
+
+    // Dynamic HUD labels based on mood
+    get hudLabels(): [string, string] {
+        return this.mood === 'relaxation'
+            ? ['X: Depth', 'Y: Drift']
+            : ['X: Texture', 'Y: Voicing'];
+    }
 
     setMood(mood: OneheartMood): void {
         this.mood = mood;
@@ -106,11 +145,17 @@ export class OneheartMode extends BaseSynthMode {
         const pads: OneheartPadVoice[] = [];
         const chord = chords[0];
 
+        // Create noise layers (initially silent)
+        const wavesNoise = this.createNoiseLayer(ctx, filter, 'waves');
+        const tapeNoise = this.createNoiseLayer(ctx, filter, 'tape');
+
         this.nodes = {
             pads,
             lfoSlow,
             lfoMedium,
             masterGain: oneheartMaster,
+            wavesNoise,
+            tapeNoise,
         };
 
         for (let i = 0; i < chord.length; i++) {
@@ -120,9 +165,10 @@ export class OneheartMode extends BaseSynthMode {
             if (pad) pads.push(pad);
         }
 
-        // Set long reverb for Oneheart mode
+        // Set reverb based on mood (relaxation has longer, wetter reverb)
+        const reverbSettings = this.mood === 'relaxation' ? RELAXATION_REVERB : ONEHEART_REVERB;
         if (engine.setReverb) {
-            engine.setReverb(ONEHEART_REVERB.decay, ONEHEART_REVERB.wet, ONEHEART_REVERB.dry);
+            engine.setReverb(reverbSettings.decay, reverbSettings.wet, reverbSettings.dry);
         }
 
         // Start the evolution loop
@@ -192,6 +238,74 @@ export class OneheartMode extends BaseSynthMode {
         };
     }
 
+    private createNoiseBuffer(ctx: AudioContext, duration = 4): AudioBuffer {
+        const sampleRate = ctx.sampleRate;
+        const length = sampleRate * duration;
+        const buffer = ctx.createBuffer(2, length, sampleRate);
+
+        for (let channel = 0; channel < 2; channel++) {
+            const data = buffer.getChannelData(channel);
+            for (let i = 0; i < length; i++) {
+                data[i] = Math.random() * 2 - 1;
+            }
+        }
+
+        return buffer;
+    }
+
+    private createNoiseLayer(
+        ctx: AudioContext,
+        destination: BiquadFilterNode,
+        type: 'waves' | 'tape'
+    ): NoiseLayer {
+        const noiseBuffer = this.createNoiseBuffer(ctx, 4);
+
+        // Create noise source
+        const source = ctx.createBufferSource();
+        source.buffer = noiseBuffer;
+        source.loop = true;
+
+        // Create filter based on type
+        const filter = ctx.createBiquadFilter();
+        if (type === 'waves') {
+            filter.type = 'lowpass';
+            filter.frequency.value = WAVES_FILTER;
+            filter.Q.value = 0.7;
+        } else {
+            // Tape: use bandpass for hissy character
+            filter.type = 'bandpass';
+            filter.frequency.value = (TAPE_FILTER_LOW + TAPE_FILTER_HIGH) / 2;
+            filter.Q.value = 0.5;
+        }
+
+        // Create gain (starts at 0)
+        const gain = ctx.createGain();
+        gain.gain.value = 0;
+
+        // Create LFO for wave-like modulation
+        const lfo = ctx.createOscillator();
+        lfo.type = 'sine';
+        lfo.frequency.value = type === 'waves' ? WAVES_LFO_RATE : TAPE_LFO_RATE;
+
+        // LFO gain controls modulation depth
+        const lfoGain = ctx.createGain();
+        lfoGain.gain.value = 0; // Will be set based on noise mix
+
+        // Connect LFO to gain's gain parameter for amplitude modulation
+        lfo.connect(lfoGain);
+        lfoGain.connect(gain.gain);
+
+        // Connect: noise -> filter -> gain -> master filter
+        source.connect(filter);
+        filter.connect(gain);
+        gain.connect(destination);
+
+        source.start();
+        lfo.start();
+
+        return { source, filter, gain, lfo, lfoGain };
+    }
+
     private startLoop(engine: EngineContext): void {
         if (this.loopInterval) clearInterval(this.loopInterval);
 
@@ -234,15 +348,34 @@ export class OneheartMode extends BaseSynthMode {
         const preset = ONEHEART_PRESETS[this.mood];
         const dt = ONEHEART_LOOP_INTERVAL / 1000;
         const chords = preset.chords;
+        const isRelaxation = this.mood === 'relaxation';
 
         // Update evolution phase (slow sine wave for breathing effect)
         state.evolutionPhase += dt * 0.1 * preset.evolutionSpeed;
         state.filterPhase += dt * 0.05;
 
-        // Smoothly interpolate pitch and voicing
+        // Smoothly interpolate parameters based on mood
         const interpSpeed = this.isTouching ? 0.08 : 0.02; // Faster when touching
-        this.currentPitchOffset += (this.targetPitchOffset - this.currentPitchOffset) * interpSpeed;
-        this.currentVoicing += (this.targetVoicing - this.currentVoicing) * interpSpeed;
+
+        if (isRelaxation) {
+            // Relaxation mode: depth and drift
+            this.currentDepth += (this.targetDepth - this.currentDepth) * interpSpeed;
+            this.currentDrift += (this.targetDrift - this.currentDrift) * interpSpeed;
+        } else {
+            // Focus mode: texture and voicing
+            this.currentNoiseMix += (this.targetNoiseMix - this.currentNoiseMix) * interpSpeed;
+            this.currentVoicing += (this.targetVoicing - this.currentVoicing) * interpSpeed;
+        }
+
+        // Update noise phase for modulating blend between waves/tape
+        this.noisePhase += dt * 0.15;
+
+        // Update noise layers based on mode
+        if (isRelaxation) {
+            this.updateNoiseLayersRelaxation(now);
+        } else {
+            this.updateNoiseLayers(now);
+        }
 
         // Check if it's time for a chord change
         const timeSinceChordChange = Date.now() - state.lastChordChange;
@@ -253,29 +386,35 @@ export class OneheartMode extends BaseSynthMode {
         // Get current chord intervals
         const chord = chords[state.currentChordIndex];
 
+        // Calculate drift-influenced modulation depth for relaxation
+        const driftMod = isRelaxation ? this.currentDrift : 0.5;
+
         // Evolve pad voices
-        const breatheMod = 0.85 + Math.sin(state.evolutionPhase) * 0.15;
+        const breatheAmount = 0.1 + driftMod * 0.15; // More breathing with more drift
+        const breatheMod = 1 - breatheAmount + Math.sin(state.evolutionPhase) * breatheAmount;
 
         nodes.pads.forEach((pad, padIndex) => {
-            // Slowly evolve detune for organic movement
-            pad.detunePhase += dt * (0.08 + padIndex * 0.02);
+            // Slowly evolve detune for organic movement (faster with drift)
+            const detuneSpeed = isRelaxation
+                ? 0.05 + this.currentDrift * 0.1
+                : 0.08;
+            pad.detunePhase += dt * (detuneSpeed + padIndex * 0.02);
 
-            // Calculate frequency with pitch offset and voicing
+            // Calculate frequency with voicing (fixed at 1.0 for relaxation)
             if (padIndex < chord.length) {
                 const baseSemitone = chord[padIndex];
-                // Apply voicing: root stays fixed, intervals scale with voicing
+                const voicing = isRelaxation ? 1.0 : this.currentVoicing;
                 const voicedSemitone = padIndex === 0
                     ? baseSemitone
-                    : baseSemitone * this.currentVoicing;
-                // Apply pitch offset
-                const finalSemitone = voicedSemitone + this.currentPitchOffset;
-                const targetFreq = ONEHEART_BASE_FREQ * Math.pow(2, finalSemitone / 12);
+                    : baseSemitone * voicing;
+                const targetFreq = ONEHEART_BASE_FREQ * Math.pow(2, voicedSemitone / 12);
 
                 pad.oscs.forEach((o, oscIndex) => {
                     o.osc.frequency.setTargetAtTime(targetFreq, now, 0.3);
 
-                    // Subtle detune drift
-                    const detuneDrift = Math.sin(pad.detunePhase + oscIndex * 1.5) * 2;
+                    // Detune drift (more with relaxation drift)
+                    const detuneDriftAmount = isRelaxation ? 2 + this.currentDrift * 4 : 2;
+                    const detuneDrift = Math.sin(pad.detunePhase + oscIndex * 1.5) * detuneDriftAmount;
                     o.osc.detune.setTargetAtTime(o.baseDetune + detuneDrift, now, 0.5);
 
                     // Subtle gain modulation (breathing)
@@ -285,8 +424,9 @@ export class OneheartMode extends BaseSynthMode {
                 });
             }
 
-            // Subtle panning drift
-            const panDrift = Math.sin(pad.detunePhase * 0.3) * 0.1;
+            // Panning drift (more stereo movement with drift)
+            const panDriftAmount = isRelaxation ? 0.1 + this.currentDrift * 0.2 : 0.1;
+            const panDrift = Math.sin(pad.detunePhase * 0.3) * panDriftAmount;
             const basePan = nodes.pads.length > 1
                 ? (padIndex / (nodes.pads.length - 1)) * 1.2 - 0.6
                 : 0;
@@ -297,22 +437,120 @@ export class OneheartMode extends BaseSynthMode {
         const filterRange = preset.filterRange[1] - preset.filterRange[0];
         const filterCenter = preset.filterRange[0] + filterRange / 2;
         const filterMod = Math.sin(state.filterPhase) * filterRange * 0.3;
-        const targetFilter = filterCenter + filterMod;
+        let targetFilter = filterCenter + filterMod;
+
+        // Relaxation: depth darkens the filter
+        if (isRelaxation && 'depthFilterMult' in preset) {
+            const depthPreset = preset as typeof preset & { depthFilterMult: readonly [number, number] };
+            const filterMult = depthPreset.depthFilterMult[0] +
+                this.currentDepth * (depthPreset.depthFilterMult[1] - depthPreset.depthFilterMult[0]);
+            targetFilter *= filterMult;
+        }
 
         // Also consider device tilt for filter control
         const tiltFactor = 1 - engine.orientationParams.filterMod;
         const finalFilter = preset.filterRange[0] + (targetFilter - preset.filterRange[0]) * tiltFactor;
 
-        engine.filter.frequency.setTargetAtTime(finalFilter, now, 0.5);
+        engine.filter.frequency.setTargetAtTime(clamp(finalFilter, preset.filterRange[0], preset.filterRange[1]), now, 0.5);
 
-        // Update HUD with pitch and voicing info
-        const chordNames = ['I', 'IV', 'vi', 'V', 'iii', 'ii', 'Vsus', 'Iadd9'];
+        // Relaxation: depth affects reverb wet mix
+        if (isRelaxation && engine.setReverbWet && 'depthReverbRange' in preset) {
+            const depthPreset = preset as typeof preset & { depthReverbRange: readonly [number, number] };
+            const wetMix = depthPreset.depthReverbRange[0] +
+                this.currentDepth * (depthPreset.depthReverbRange[1] - depthPreset.depthReverbRange[0]);
+            engine.setReverbWet(wetMix);
+        }
+
+        // Update HUD based on mood
+        this.updateHUD(engine, state);
+    }
+
+    private updateHUD(engine: EngineContext, state: OneheartState): void {
+        const isRelaxation = this.mood === 'relaxation';
+        const chordNames = isRelaxation
+            ? ['sus4', 'Fsus', 'Gsus', 'add9', 'Am7']
+            : ['I', 'IV', 'vi', 'V', 'iii', 'ii', 'Vsus', 'Iadd9'];
         const chordName = chordNames[state.currentChordIndex % chordNames.length] || 'I';
-        const pitchStr = this.currentPitchOffset >= 0
-            ? `+${Math.round(this.currentPitchOffset)}`
-            : `${Math.round(this.currentPitchOffset)}`;
-        const voicingStr = this.currentVoicing < 0.8 ? 'tight' : this.currentVoicing > 1.2 ? 'wide' : 'med';
-        engine.updateHUD(`${chordName} ${pitchStr}st`, voicingStr);
+
+        if (isRelaxation) {
+            const depthPercent = Math.round(this.currentDepth * 100);
+            const depthStr = depthPercent < 20 ? 'surface' : depthPercent > 70 ? 'deep' : `${depthPercent}%`;
+            const driftStr = this.currentDrift < 0.4 ? 'still' : this.currentDrift > 0.7 ? 'flowing' : 'gentle';
+            engine.updateHUD(`${chordName} ${depthStr}`, driftStr);
+        } else {
+            const noisePercent = Math.round(this.currentNoiseMix * 100);
+            const noiseStr = noisePercent === 0 ? 'clean' : `tex ${noisePercent}%`;
+            const voicingStr = this.currentVoicing < 0.8 ? 'tight' : this.currentVoicing > 1.2 ? 'wide' : 'med';
+            engine.updateHUD(`${chordName} ${noiseStr}`, voicingStr);
+        }
+    }
+
+    private updateNoiseLayers(now: number): void {
+        if (!this.nodes) return;
+
+        const { wavesNoise, tapeNoise } = this.nodes;
+        if (!wavesNoise || !tapeNoise) return;
+
+        // Calculate modulating blend between waves and tape
+        // As mix increases, both layers come in, with waves/tape ratio modulating
+        const blendOsc = Math.sin(this.noisePhase) * 0.5 + 0.5; // 0 to 1 oscillation
+
+        // Waves: more prominent at lower mix, tape: more prominent at higher mix
+        // But blend oscillates between them
+        const wavesWeight = 1 - blendOsc * 0.6; // 0.4 to 1.0
+        const tapeWeight = 0.4 + blendOsc * 0.6; // 0.4 to 1.0
+
+        const wavesLevel = this.currentNoiseMix * WAVES_GAIN * wavesWeight;
+        const tapeLevel = this.currentNoiseMix * TAPE_GAIN * tapeWeight;
+
+        // Set gain levels with smooth transition
+        wavesNoise.gain.gain.setTargetAtTime(wavesLevel, now, 0.3);
+        tapeNoise.gain.gain.setTargetAtTime(tapeLevel, now, 0.3);
+
+        // Modulate LFO depth based on noise mix (more texture = more modulation)
+        const lfoDepth = this.currentNoiseMix * 0.5; // 0 to 0.5 modulation
+        wavesNoise.lfoGain.gain.setTargetAtTime(wavesLevel * lfoDepth, now, 0.3);
+        tapeNoise.lfoGain.gain.setTargetAtTime(tapeLevel * lfoDepth * 0.7, now, 0.3);
+    }
+
+    private updateNoiseLayersRelaxation(now: number): void {
+        if (!this.nodes) return;
+
+        const { wavesNoise, tapeNoise } = this.nodes;
+        if (!wavesNoise || !tapeNoise) return;
+
+        // In relaxation mode, depth controls how "distant" the texture is
+        // More depth = more texture but also more filtered/distant
+        const preset = ONEHEART_PRESETS[this.mood];
+        const textureLevel = preset.textureLevel;
+
+        // Waves are always on in relaxation, modulated by drift
+        const driftOsc = Math.sin(this.noisePhase * (0.5 + this.currentDrift * 0.5)) * 0.5 + 0.5;
+
+        // Base texture increases with depth (sinking deeper adds more ambient texture)
+        const depthTextureBoost = this.currentDepth * 0.5;
+        const baseLevel = textureLevel + depthTextureBoost;
+
+        // Waves dominate at surface, tape becomes more prominent at depth
+        const wavesWeight = 1 - this.currentDepth * 0.4; // 0.6 to 1.0
+        const tapeWeight = 0.3 + this.currentDepth * 0.5; // 0.3 to 0.8
+
+        const wavesLevel = baseLevel * WAVES_GAIN * wavesWeight * (0.7 + driftOsc * 0.3);
+        const tapeLevel = baseLevel * TAPE_GAIN * tapeWeight * (0.8 + driftOsc * 0.2);
+
+        // Set gain levels with slower transitions for relaxation
+        wavesNoise.gain.gain.setTargetAtTime(wavesLevel, now, 0.5);
+        tapeNoise.gain.gain.setTargetAtTime(tapeLevel, now, 0.5);
+
+        // LFO modulation controlled by drift
+        const lfoDepth = 0.2 + this.currentDrift * 0.5;
+        wavesNoise.lfoGain.gain.setTargetAtTime(wavesLevel * lfoDepth, now, 0.5);
+        tapeNoise.lfoGain.gain.setTargetAtTime(tapeLevel * lfoDepth * 0.6, now, 0.5);
+
+        // Filter the noise darker at deeper levels
+        const baseFilterFreq = WAVES_FILTER;
+        const depthFilterMult = 1 - this.currentDepth * 0.5; // Gets darker with depth
+        wavesNoise.filter.frequency.setTargetAtTime(baseFilterFreq * depthFilterMult, now, 0.5);
     }
 
     private triggerChordChange(engine: EngineContext): void {
@@ -354,13 +592,21 @@ export class OneheartMode extends BaseSynthMode {
         this.engineRef = engine;
         this.isTouching = true;
 
-        // X controls pitch offset (-12 to +12 semitones)
-        // Center (0.5) = no offset, left = lower, right = higher
-        this.targetPitchOffset = (x - 0.5) * 2 * PITCH_RANGE_SEMITONES;
+        if (this.mood === 'relaxation') {
+            // Relaxation mode: X = depth, Y = drift
+            // X: Left = surface/dry, Right = deep/wet
+            this.targetDepth = x;
 
-        // Y controls voicing spread
-        // Bottom (0) = tight/close voicing, Top (1) = wide/open voicing
-        this.targetVoicing = VOICING_TIGHT + y * (VOICING_WIDE - VOICING_TIGHT);
+            // Y: Bottom = still, Top = flowing
+            this.targetDrift = y;
+        } else {
+            // Focus mode: X = texture, Y = voicing
+            // X: Left = clean, Right = textured
+            this.targetNoiseMix = x;
+
+            // Y: Bottom = tight voicing, Top = wide voicing
+            this.targetVoicing = VOICING_TIGHT + y * (VOICING_WIDE - VOICING_TIGHT);
+        }
 
         // Trigger chord change on initial touch (duration < 0.1s means new touch)
         if (duration < 0.1) {
@@ -397,6 +643,14 @@ export class OneheartMode extends BaseSynthMode {
             this.cleanupOscillator(this.nodes.lfoSlow);
             this.cleanupOscillator(this.nodes.lfoMedium);
 
+            // Clean up noise layers
+            if (this.nodes.wavesNoise) {
+                this.cleanupNoiseLayer(this.nodes.wavesNoise);
+            }
+            if (this.nodes.tapeNoise) {
+                this.cleanupNoiseLayer(this.nodes.tapeNoise);
+            }
+
             // Clean up master gain
             this.cleanupGain(this.nodes.masterGain);
 
@@ -405,6 +659,25 @@ export class OneheartMode extends BaseSynthMode {
 
         this.state = null;
         this.engineRef = null;
+
+        // Reset noise state
+        this.targetNoiseMix = 0;
+        this.currentNoiseMix = 0;
+        this.noisePhase = 0;
+    }
+
+    private cleanupNoiseLayer(layer: NoiseLayer): void {
+        try {
+            layer.source.stop();
+            layer.source.disconnect();
+        } catch { /* ignore */ }
+        try {
+            layer.lfo.stop();
+            layer.lfo.disconnect();
+        } catch { /* ignore */ }
+        this.cleanupGain(layer.gain);
+        this.cleanupGain(layer.lfoGain);
+        try { layer.filter.disconnect(); } catch { /* ignore */ }
     }
 
     getVoiceCount(): number {

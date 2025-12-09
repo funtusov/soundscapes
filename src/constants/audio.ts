@@ -185,7 +185,8 @@ export const SYNTHESIS_MODES = [
     'formant',
     'ambient',
     'bassline',
-    'oneheart'
+    'focus',
+    'relaxation'
 ] as const;
 
 export type SynthesisMode = typeof SYNTHESIS_MODES[number];

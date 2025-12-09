@@ -41,7 +41,8 @@ export const modeRegistry: Partial<Record<SynthesisMode, SynthMode>> = {
     formant: new FormantMode(),
     bassline: new BasslineMode(),
     ambient: new AmbientMode(),
-    oneheart: new OneheartMode(),
+    focus: new OneheartMode(),
+    relaxation: new OneheartMode(),
 };
 
 /**

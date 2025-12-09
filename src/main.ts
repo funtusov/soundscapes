@@ -39,7 +39,7 @@ function initApp(e?: Event) {
     document.getElementById('scaleControls')!.style.display = 'flex';
     document.getElementById('loopControls')!.style.display = 'flex';
     document.getElementById('effectsControls')!.style.display = 'flex';
-    document.getElementById('textureControls')!.style.display = audio.mode === 'oneheart' ? 'flex' : 'none';
+    document.getElementById('textureControls')!.style.display = (audio.mode === 'focus' || audio.mode === 'relaxation') ? 'flex' : 'none';
 
     // Initialize UI
     initModeSelector(audio);
