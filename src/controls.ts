@@ -4,6 +4,7 @@
 
 import { addRipple, setCursor, removeCursor, getCanvasSize } from './visualizer';
 import { LoopRecorder } from './LoopRecorder';
+import { AudioRecorder } from './AudioRecorder';
 import type { AudioEngine } from './AudioEngine';
 import { clamp, TOUCH_TAP_MAX_DURATION, TOUCH_PRESS_MAX_DURATION, type NoiseType } from './constants';
 import { haptic } from 'ios-haptics';
@@ -766,4 +767,50 @@ export function initBeatsControls(audio: AudioEngine) {
             }, 100);
         });
     }
+}
+
+export function initRecordControls(audio: AudioEngine) {
+    const recordBtn = document.getElementById('recordBtn')!;
+    const recordIcon = recordBtn.querySelector('.record-icon')!;
+    const recordTime = document.getElementById('recordTime')!;
+
+    const recorder = new AudioRecorder(audio);
+
+    // Update UI based on state
+    recorder.setOnStateChange((state, duration) => {
+        if (state === 'recording') {
+            recordBtn.classList.add('recording');
+            recordIcon.textContent = '■';
+            recordTime.textContent = duration !== undefined
+                ? AudioRecorder.formatDuration(duration)
+                : '0:00';
+        } else {
+            recordBtn.classList.remove('recording');
+            recordIcon.textContent = '●';
+            recordTime.textContent = '';
+        }
+    });
+
+    // Touch-safe handler
+    let justTouched = false;
+    const handleRecord = (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
+
+        if (e.type === 'touchend') {
+            justTouched = true;
+            setTimeout(() => { justTouched = false; }, 100);
+        } else if (e.type === 'click' && justTouched) {
+            return;
+        }
+
+        if (recorder.getState() === 'recording') {
+            recorder.stop();
+        } else {
+            recorder.start();
+        }
+    };
+
+    recordBtn.addEventListener('click', handleRecord);
+    recordBtn.addEventListener('touchend', handleRecord);
 }

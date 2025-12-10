@@ -938,3 +938,50 @@ canvas {
     font-size: 0.75rem;
     font-family: 'Courier New', monospace;
 }
+
+/* Record button */
+.record-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    border: 1px solid rgba(255, 80, 80, 0.5);
+    background: transparent;
+    color: rgba(255, 80, 80, 0.7);
+    font-size: 0.75rem;
+    font-family: 'Courier New', monospace;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.record-btn:hover {
+    border-color: rgba(255, 80, 80, 0.8);
+    color: rgba(255, 80, 80, 0.9);
+    background: rgba(255, 80, 80, 0.1);
+}
+
+.record-btn.recording {
+    border-color: #ff4444;
+    color: #ff4444;
+    background: rgba(255, 68, 68, 0.2);
+    box-shadow: 0 0 12px rgba(255, 68, 68, 0.4);
+}
+
+.record-btn.recording .record-icon {
+    animation: pulse-record-icon 1s ease-in-out infinite;
+}
+
+.record-icon {
+    font-size: 0.8rem;
+}
+
+.record-time {
+    font-size: 0.7rem;
+    min-width: 32px;
+}
+
+@keyframes pulse-record-icon {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}

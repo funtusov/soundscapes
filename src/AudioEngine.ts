@@ -1071,6 +1071,15 @@ export class AudioEngine {
         return null;
     }
 
+    /** Get a MediaStream for recording the audio output */
+    getRecordingStream(): MediaStream | null {
+        if (!this.ctx || !this.masterGain) return null;
+
+        const dest = this.ctx.createMediaStreamDestination();
+        this.masterGain.connect(dest);
+        return dest.stream;
+    }
+
     updateOrientation(beta: number | null, _gamma: number | null, alpha: number | null): void {
         if (!this.ctx || !this.filter) return;
         const now = this.ctx.currentTime;
