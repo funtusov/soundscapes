@@ -18,6 +18,11 @@ export interface WavetableVoice {
     startTime: number;             // When voice started (for attack/decay)
     targetGain: number;            // Target gain after attack (includes compensation)
     adsrPhase: 'attack' | 'decay' | 'sustain'; // Current envelope phase
+    // Arpeggio state
+    arpChordFreqs?: number[];       // Chord frequencies for arpeggio
+    arpStep?: number;               // Current step in arpeggio
+    arpIntervalId?: ReturnType<typeof setInterval> | null;
+    arpLastScheduled?: number;      // Last scheduled time for smooth transitions
 }
 
 // ============ DRONE MODE ============

@@ -3,7 +3,7 @@
  */
 
 import type { TouchId, NoteInfo, VoiceDisplayInfo } from '../types';
-import { MAX_VOICES, VOICE_GAIN, VOICE_CLEANUP_BUFFER_MS, NOTE_NAMES, SCALE_PATTERNS, type ADSRPreset } from '../constants';
+import { MAX_VOICES, VOICE_GAIN, VOICE_CLEANUP_BUFFER_MS, NOTE_NAMES, SCALE_PATTERNS, DIATONIC_CHORDS, CHORD_INTERVALS, type ADSRPreset, type ChordType } from '../constants';
 
 /**
  * Shared engine context passed to modes
@@ -23,6 +23,9 @@ export interface EngineContext {
     rangeBaseFreq: number;
     // ADSR envelope preset
     envelope: ADSRPreset;
+    // Arpeggio state
+    arpEnabled: boolean;
+    arpRate: number;
     // Orientation parameters (for continuous modes)
     orientationParams: {
         pan: number;
@@ -146,14 +149,14 @@ export abstract class BaseSynthMode implements SynthMode {
     /**
      * Quantize X position to scale, returning frequency and note info
      */
-    protected quantizeToScale(x: number, octaves: number, baseFreq: number, engine: EngineContext): NoteInfo {
+    protected quantizeToScale(x: number, octaves: number, baseFreq: number, engine: EngineContext): NoteInfo & { degree: number } {
         if (!engine.isQuantized) {
             const semitones = x * octaves * 12;
             const freq = baseFreq * Math.pow(2, semitones / 12);
             const nearestSemitone = Math.round(semitones);
             const noteName = this.getNoteName(engine.tonic + nearestSemitone);
             const octave = Math.floor(nearestSemitone / 12) + 2;
-            return { freq, semitone: semitones, noteName, octave, isQuantized: false };
+            return { freq, semitone: semitones, noteName, octave, isQuantized: false, degree: 0 };
         }
 
         const pattern = SCALE_PATTERNS[engine.scaleType] || SCALE_PATTERNS.minor;
@@ -170,7 +173,39 @@ export abstract class BaseSynthMode implements SynthMode {
             semitone: pattern[degree] + octave * 12,
             noteName: this.getNoteName(semitone),
             octave: octave + 2,
-            isQuantized: true
+            isQuantized: true,
+            degree
         };
+    }
+
+    /**
+     * Get diatonic chord type for a scale degree
+     */
+    protected getDiatonicChordType(scaleType: string, degree: number): ChordType {
+        const chordMap = DIATONIC_CHORDS[scaleType] || DIATONIC_CHORDS.minor;
+        return chordMap[degree % chordMap.length] || 'minor';
+    }
+
+    /**
+     * Get chord frequencies (arpeggio notes) from a root frequency and chord type
+     */
+    protected getArpChordFrequencies(rootFreq: number, chordType: ChordType): number[] {
+        const intervals = CHORD_INTERVALS[chordType] || CHORD_INTERVALS.minor;
+        return intervals.map(semitones => rootFreq * Math.pow(2, semitones / 12));
+    }
+
+    /**
+     * Get chord name for display
+     */
+    protected getArpChordName(noteName: string, chordType: ChordType): string {
+        const suffixes: Record<ChordType, string> = {
+            major: '',
+            minor: 'm',
+            dim: '°',
+            aug: '+',
+            sus4: 'sus4',
+            power: '5',
+        };
+        return noteName + (suffixes[chordType] || '');
     }
 }

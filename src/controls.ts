@@ -352,6 +352,18 @@ export function initScaleControls(audio: AudioEngine) {
 
     envelopeBtn.addEventListener('click', handleEnvelopeToggle);
     envelopeBtn.addEventListener('touchend', handleEnvelopeToggle);
+
+    // Arp button handler
+    const arpBtn = document.getElementById('arpBtn')!;
+    const handleArpToggle = (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const enabled = audio.toggleArp();
+        arpBtn.classList.toggle('active', enabled);
+    };
+
+    arpBtn.addEventListener('click', handleArpToggle);
+    arpBtn.addEventListener('touchend', handleArpToggle);
 }
 
 // Extend window for iOS device orientation/motion permissions

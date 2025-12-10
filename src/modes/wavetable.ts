@@ -7,7 +7,7 @@
 
 import type { TouchId, WavetableVoice } from '../types';
 import { BaseSynthMode, EngineContext, MAX_VOICES, VOICE_GAIN, VOICE_CLEANUP_BUFFER_MS } from './base';
-import { SHAKE_ACCELERATION_THRESHOLD } from '../constants';
+import { SHAKE_ACCELERATION_THRESHOLD, type ChordType } from '../constants';
 
 // Number of harmonics for waveform synthesis
 const NUM_HARMONICS = 32;
@@ -156,6 +156,17 @@ export class WavetableMode extends BaseSynthMode {
         // Compute note frequency from Y position (higher Y = higher pitch)
         const note = this.quantizeToScale(y, engine.rangeOctaves, engine.rangeBaseFreq, engine);
 
+        // Get chord info for arpeggio mode
+        let chordType: ChordType = 'minor';
+        let chordFreqs: number[] = [note.freq];
+        let chordName = note.noteName;
+
+        if (engine.arpEnabled && engine.isQuantized) {
+            chordType = this.getDiatonicChordType(engine.scaleType, note.degree);
+            chordFreqs = this.getArpChordFrequencies(note.freq, chordType);
+            chordName = this.getArpChordName(note.noteName, chordType);
+        }
+
         // Create voice if it doesn't exist
         if (!this.voices.has(touchId)) {
             if (this.voices.size >= MAX_VOICES) return;
@@ -173,7 +184,10 @@ export class WavetableMode extends BaseSynthMode {
             // Set waveform from X position (sine on left, square on right)
             const initialWave = this.getMorphedWave(ctx, x);
             osc.setPeriodicWave(initialWave);
-            osc.frequency.value = note.freq;  // Set correct frequency immediately
+
+            // Set initial frequency (first chord note if arp, otherwise root)
+            const initialFreq = engine.arpEnabled && engine.isQuantized ? chordFreqs[0] : note.freq;
+            osc.frequency.value = initialFreq;
 
             // Apply loudness compensation based on waveform (X position)
             const compensation = getLoudnessCompensation(x);
@@ -215,17 +229,30 @@ export class WavetableMode extends BaseSynthMode {
             lfo.start();
             tremoloLfo.start();
 
-            this.voices.set(touchId, {
+            const voice: WavetableVoice = {
                 osc, gain, lfo, lfoGain, tremoloLfo, tremoloGain, tremoloDepth,
                 startTime: now,
                 targetGain: compensatedGain,
-                adsrPhase: 'attack'
-            });
+                adsrPhase: 'attack',
+                // Arpeggio state
+                arpChordFreqs: chordFreqs,
+                arpStep: 0,
+                arpIntervalId: null,
+                arpLastScheduled: now
+            };
 
-            // Register voice for HUD display with actual note info
+            // Start arpeggio if enabled
+            if (engine.arpEnabled && engine.isQuantized && chordFreqs.length > 1) {
+                this.startArpeggio(voice, engine);
+            }
+
+            this.voices.set(touchId, voice);
+
+            // Register voice for HUD display
+            const displayName = engine.arpEnabled && engine.isQuantized ? chordName : note.noteName;
             engine.registerVoice({
                 touchId,
-                noteName: note.noteName,
+                noteName: displayName,
                 octave: note.octave,
                 freq: note.freq,
                 waveform: this.getWaveformName(x)
@@ -234,8 +261,21 @@ export class WavetableMode extends BaseSynthMode {
 
         const voice = this.voices.get(touchId)!;
 
-        // Smoothly update frequency (for finger movement)
-        voice.osc.frequency.setTargetAtTime(note.freq, now, 0.005);
+        // Update arpeggio chord if enabled and finger moved to new note
+        if (engine.arpEnabled && engine.isQuantized) {
+            // Update chord frequencies for arpeggio
+            voice.arpChordFreqs = chordFreqs;
+
+            // If arpeggio not running but should be, start it
+            if (!voice.arpIntervalId && chordFreqs.length > 1) {
+                this.startArpeggio(voice, engine);
+            }
+        } else {
+            // Stop arpeggio if arp disabled or not quantized
+            this.stopArpeggio(voice);
+            // Smoothly update frequency (for finger movement)
+            voice.osc.frequency.setTargetAtTime(note.freq, now, 0.005);
+        }
 
         // Apply loudness compensation based on waveform (X position)
         const compensation = getLoudnessCompensation(x);
@@ -299,12 +339,45 @@ export class WavetableMode extends BaseSynthMode {
 
         // Update voice registry for HUD
         const waveformName = this.getWaveformName(x);
+        const displayName = engine.arpEnabled && engine.isQuantized ? chordName : note.noteName;
         engine.updateVoice(touchId, {
-            noteName: note.noteName,
+            noteName: displayName,
             octave: note.octave,
             freq: note.freq,
             waveform: waveformName
         });
+    }
+
+    /**
+     * Start arpeggiator for a voice
+     */
+    private startArpeggio(voice: WavetableVoice, engine: EngineContext): void {
+        if (voice.arpIntervalId) return; // Already running
+
+        const intervalMs = 1000 / engine.arpRate;
+        voice.arpStep = 0;
+
+        voice.arpIntervalId = setInterval(() => {
+            if (!voice.arpChordFreqs || voice.arpChordFreqs.length === 0) return;
+
+            // Advance to next step
+            voice.arpStep = ((voice.arpStep || 0) + 1) % voice.arpChordFreqs.length;
+            const nextFreq = voice.arpChordFreqs[voice.arpStep];
+
+            // Smooth frequency transition (glide)
+            const now = engine.ctx.currentTime;
+            voice.osc.frequency.setTargetAtTime(nextFreq, now, 0.02);
+        }, intervalMs);
+    }
+
+    /**
+     * Stop arpeggiator for a voice
+     */
+    private stopArpeggio(voice: WavetableVoice): void {
+        if (voice.arpIntervalId) {
+            clearInterval(voice.arpIntervalId);
+            voice.arpIntervalId = null;
+        }
     }
 
     stop(touchId: TouchId, _releaseTime: number, engine: EngineContext): void {
@@ -312,6 +385,9 @@ export class WavetableMode extends BaseSynthMode {
 
         const voice = this.voices.get(touchId)!;
         const now = engine.ctx.currentTime;
+
+        // Stop arpeggio if running
+        this.stopArpeggio(voice);
 
         // Use envelope's release time (ignore the passed releaseTime for ADSR presets)
         const release = engine.envelope.release;
@@ -340,6 +416,8 @@ export class WavetableMode extends BaseSynthMode {
 
     cleanup(): void {
         for (const voice of this.voices.values()) {
+            // Stop arpeggio if running
+            this.stopArpeggio(voice);
             this.cleanupOscillator(voice.osc);
             this.cleanupOscillator(voice.lfo);
             this.cleanupOscillator(voice.tremoloLfo);

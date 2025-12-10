@@ -107,6 +107,10 @@ export class AudioEngine {
     // ADSR envelope preset
     envelopeIndex = 0; // Default to "Pad"
 
+    // Arpeggio state
+    arpEnabled = false;
+    arpRate = 2; // Notes per second
+
     // Reverb effect chain
     private convolver: ConvolverNode | null = null;
     private reverbWetGain: GainNode | null = null;
@@ -230,6 +234,8 @@ export class AudioEngine {
             rangeOctaves: this.rangePresets[this.rangeIndex].octaves,
             rangeBaseFreq: this.rangePresets[this.rangeIndex].baseFreq,
             envelope: ADSR_PRESETS[this.envelopeIndex],
+            arpEnabled: this.arpEnabled,
+            arpRate: this.arpRate,
             orientationParams: this.orientationParams,
             updateHUD: (freq, harm) => this.updateHUD(freq, harm),
             registerVoice: (info) => this.registerVoice(info),
@@ -943,6 +949,22 @@ export class AudioEngine {
             return true;
         }
         return false;
+    }
+
+    /** Toggle arpeggio mode */
+    toggleArp(): boolean {
+        this.arpEnabled = !this.arpEnabled;
+        return this.arpEnabled;
+    }
+
+    /** Set arpeggio enabled state */
+    setArpEnabled(enabled: boolean): void {
+        this.arpEnabled = enabled;
+    }
+
+    /** Set arpeggio rate (notes per second) */
+    setArpRate(rate: number): void {
+        this.arpRate = Math.max(2, Math.min(16, rate));
     }
 
     resume(): void {

@@ -172,6 +172,56 @@ export const SCALE_PATTERNS: Record<string, number[]> = {
     chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 };
 
+// ============ ARPEGGIO / CHORD CONSTANTS ============
+
+/** Chord types with intervals (semitones from root) */
+export const CHORD_INTERVALS = {
+    major: [0, 4, 7],       // Major triad
+    minor: [0, 3, 7],       // Minor triad
+    dim: [0, 3, 6],         // Diminished triad
+    aug: [0, 4, 8],         // Augmented triad
+    sus4: [0, 5, 7],        // Suspended 4th
+    power: [0, 7, 12],      // Power chord (for pentatonics)
+} as const;
+
+export type ChordType = keyof typeof CHORD_INTERVALS;
+
+/**
+ * Diatonic chord qualities for each scale degree
+ * Maps scale type to an array of chord types (one per scale degree)
+ */
+export const DIATONIC_CHORDS: Record<string, ChordType[]> = {
+    // Major: I-maj, ii-min, iii-min, IV-maj, V-maj, vi-min, vii°-dim
+    major: ['major', 'minor', 'minor', 'major', 'major', 'minor', 'dim'],
+    // Natural minor: i-min, ii°-dim, III-maj, iv-min, v-min, VI-maj, VII-maj
+    minor: ['minor', 'dim', 'major', 'minor', 'minor', 'major', 'major'],
+    // Harmonic minor: i-min, ii°-dim, III+-aug, iv-min, V-maj, VI-maj, vii°-dim
+    harm_min: ['minor', 'dim', 'aug', 'minor', 'major', 'major', 'dim'],
+    // Dorian: i-min, ii-min, III-maj, IV-maj, v-min, vi°-dim, VII-maj
+    dorian: ['minor', 'minor', 'major', 'major', 'minor', 'dim', 'major'],
+    // Lydian: I-maj, II-maj, iii-min, iv°-dim, V-maj, vi-min, vii-min
+    lydian: ['major', 'major', 'minor', 'dim', 'major', 'minor', 'minor'],
+    // Mixolydian: I-maj, ii-min, iii°-dim, IV-maj, v-min, vi-min, VII-maj
+    mixolydian: ['major', 'minor', 'dim', 'major', 'minor', 'minor', 'major'],
+    // Pentatonic major: Use power chords for ambiguity (1, 2, 3, 5, 6)
+    pent_maj: ['major', 'minor', 'minor', 'major', 'minor'],
+    // Pentatonic minor: Use minor/power chords (1, b3, 4, 5, b7)
+    pent_min: ['minor', 'major', 'sus4', 'power', 'minor'],
+    // Blues: Similar to pentatonic minor
+    blues: ['minor', 'major', 'sus4', 'dim', 'power', 'minor'],
+    // Whole tone: All augmented
+    whole_tone: ['aug', 'aug', 'aug', 'aug', 'aug', 'aug'],
+    // Chromatic: Default to major
+    chromatic: ['major', 'minor', 'major', 'minor', 'major', 'major', 'minor', 'major', 'minor', 'major', 'minor', 'dim'],
+};
+
+/** Default arpeggio rate (notes per second) */
+export const ARP_DEFAULT_RATE = 6;
+
+/** Arpeggio rate range */
+export const ARP_RATE_MIN = 2;
+export const ARP_RATE_MAX = 16;
+
 // ============ LOOP RECORDER CONSTANTS ============
 
 /** Base offset for playback touch IDs to avoid conflicts */
