@@ -9,8 +9,11 @@ export type TouchId = number | string;
 export interface WavetableVoice {
     osc: OscillatorNode;
     gain: GainNode;
-    lfo: OscillatorNode;
+    lfo: OscillatorNode;           // Vibrato (pitch modulation)
     lfoGain: GainNode;
+    tremoloLfo: OscillatorNode;    // Tremolo (amplitude modulation)
+    tremoloGain: GainNode;
+    tremoloDepth: GainNode;        // Controls tremolo amount
 }
 
 // ============ DRONE MODE ============

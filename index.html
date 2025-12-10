@@ -17,12 +17,11 @@
     </div>
 
     <!-- HUD -->
-    <div class="hud hud-tl">
-        Freq: <span id="val-freq">--</span><br>
-        LPF Cutoff: <span id="val-tilt">--</span>
+    <div class="hud hud-tl" id="voiceList">
+        <div class="voice-placeholder">--</div>
     </div>
     <div class="hud hud-tr">
-        Harm: <span id="val-harm">--</span><br>
+        LPF: <span id="val-tilt">--</span><br>
         Motion: <span id="val-motion">--</span>
     </div>
 
@@ -30,6 +29,7 @@
 
     <!-- Scale Controls -->
     <div class="scale-controls" id="scaleControls" style="display: none;">
+        <button class="range-btn" id="rangeBtn">Medium</button>
         <button class="quantize-btn" id="quantizeBtn">Quantize</button>
         <div class="scale-options" id="scaleOptions">
             <select id="tonicSelect" class="scale-select">
@@ -40,16 +40,23 @@
                 <option value="4">E</option>
                 <option value="5">F</option>
                 <option value="6">F#</option>
-                <option value="7">G</option>
+                <option value="7" selected>G</option>
                 <option value="8">G#</option>
-                <option value="9" selected>A</option>
+                <option value="9">A</option>
                 <option value="10">A#</option>
                 <option value="11">B</option>
             </select>
             <select id="scaleSelect" class="scale-select">
                 <option value="major">Major</option>
-                <option value="minor" selected>Minor</option>
-                <option value="pentatonic">Penta</option>
+                <option value="minor">Minor</option>
+                <option value="pent_maj">Pent Maj</option>
+                <option value="pent_min" selected>Pent Min</option>
+                <option value="blues">Blues</option>
+                <option value="dorian">Dorian</option>
+                <option value="lydian">Lydian</option>
+                <option value="mixolydian">Mixo</option>
+                <option value="harm_min">Harm Min</option>
+                <option value="whole_tone">Whole</option>
                 <option value="chromatic">Chromatic</option>
             </select>
         </div>
@@ -100,10 +107,10 @@
     <!-- Mode Selector (main bottom bar) -->
     <div class="mode-selector" id="modeSelector" style="display: none;">
         <select class="mode-select" id="modeSelect">
+            <option value="wavetable" selected>Wave</option>
             <option value="focus">Focus</option>
             <option value="relaxation">Relax</option>
             <option value="beats">Beats</option>
-            <option value="wavetable">Wave</option>
             <option value="fm">FM</option>
             <option value="arpeggiator">Arp</option>
             <option value="karplus">String</option>

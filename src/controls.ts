@@ -248,6 +248,22 @@ export function initScaleControls(audio: AudioEngine) {
     scaleSelect.addEventListener('change', () => {
         audio.setScaleType(scaleSelect.value);
     });
+
+    // Initialize UI to match engine state (quantization enabled by default)
+    quantizeBtn.classList.toggle('active', audio.isQuantized);
+    scaleOptions.classList.toggle('visible', audio.isQuantized);
+
+    // Range button handler
+    const rangeBtn = document.getElementById('rangeBtn')!;
+    const handleRangeToggle = (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const range = audio.cycleRange();
+        rangeBtn.textContent = range.name;
+    };
+
+    rangeBtn.addEventListener('click', handleRangeToggle);
+    rangeBtn.addEventListener('touchend', handleRangeToggle);
 }
 
 // Extend window for iOS device orientation/motion permissions

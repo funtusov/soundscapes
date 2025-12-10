@@ -314,7 +314,7 @@ export function removeCursor(touchId: TouchId = 'mouse') {
     cursors.delete(touchId);
 }
 
-function drawWaveformZones() {
+function drawWaveformZones(audio: AudioEngine) {
     const playableHeight = height - CONTROL_BAR_HEIGHT;
 
     // Draw gradient background (morphing from sine to square)
@@ -325,6 +325,29 @@ function drawWaveformZones() {
     gradient.addColorStop(1, 'rgba(100, 150, 255, 0.04)');    // Sine (bottom/low Y)
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, playableHeight);
+
+    // Draw octave lines (vertical)
+    const rangeInfo = audio.getRangeInfo();
+    const octaves = Math.ceil(rangeInfo.octaves);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 4]);
+
+    for (let i = 1; i < octaves; i++) {
+        const x = (i / rangeInfo.octaves) * width;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, playableHeight);
+        ctx.stroke();
+
+        // Octave label at bottom
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.font = '10px Courier New';
+        ctx.textAlign = 'center';
+        const octaveNum = Math.floor(Math.log2(rangeInfo.baseFreq / 16.35)) + i + 1; // Calculate actual octave number
+        ctx.fillText(`${octaveNum}`, x, playableHeight - 5);
+    }
+    ctx.setLineDash([]);
 
     // Waveform markers at morph positions (not zones, just reference points)
     const waveforms = [
@@ -897,7 +920,7 @@ export function animate(audio: AudioEngine) {
 
     // Draw mode-specific overlays (after spectrogram so they're visible)
     switch (audio.mode) {
-        case 'wavetable': drawWaveformZones(); break;
+        case 'wavetable': drawWaveformZones(audio); break;
         case 'drone': drawDroneZones(); break;
         case 'fm': drawFMZones(); break;
         case 'arpeggiator': drawArpZones(); break;

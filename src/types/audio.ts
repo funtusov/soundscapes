@@ -34,6 +34,15 @@ export interface NoteInfo {
     isQuantized: boolean;
 }
 
+/** Voice info for HUD display */
+export interface VoiceDisplayInfo {
+    touchId: TouchId;
+    noteName: string;
+    octave: number;
+    freq: number;
+    waveform: string;  // e.g. "sine", "saw↔square"
+}
+
 // ============ MODE NODE CONTAINERS ============
 
 export interface WavetableNodes {

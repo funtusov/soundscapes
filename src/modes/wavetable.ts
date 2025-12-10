@@ -7,6 +7,7 @@
 
 import type { TouchId, WavetableVoice } from '../types';
 import { BaseSynthMode, EngineContext, MAX_VOICES, VOICE_GAIN, VOICE_CLEANUP_BUFFER_MS } from './base';
+import { SHAKE_ACCELERATION_THRESHOLD } from '../constants';
 
 // Number of harmonics for waveform synthesis
 const NUM_HARMONICS = 32;
@@ -161,27 +162,54 @@ export class WavetableMode extends BaseSynthMode {
             const lfo = ctx.createOscillator();
             const lfoGain = ctx.createGain();
 
+            // Tremolo chain: tremoloLfo → tremoloDepth → tremoloGain → gain.gain
+            const tremoloLfo = ctx.createOscillator();
+            const tremoloDepth = ctx.createGain();  // Controls how much tremolo
+            const tremoloGain = ctx.createGain();   // Applies tremolo to output
+
             // Start with sine wave
             const initialWave = this.getMorphedWave(ctx, y);
             osc.setPeriodicWave(initialWave);
             osc.frequency.value = 220;
             gain.gain.value = 0;
 
+            // Vibrato LFO (pitch modulation)
             lfo.frequency.value = 2;
             lfoGain.gain.value = 0;
             lfo.connect(lfoGain);
             lfoGain.connect(osc.detune);
 
+            // Tremolo LFO (amplitude modulation)
+            // Signal: osc → gain → tremoloGain → filter
+            // Tremolo: tremoloLfo → tremoloDepth → tremoloGain.gain
+            tremoloLfo.frequency.value = 6;  // Faster rate for tremolo
+            tremoloDepth.gain.value = 0;     // Start with no tremolo
+            tremoloGain.gain.value = 1;      // Base gain of 1
+
+            tremoloLfo.connect(tremoloDepth);
+            tremoloDepth.connect(tremoloGain.gain);
+
             osc.connect(gain);
-            gain.connect(filter);
+            gain.connect(tremoloGain);
+            tremoloGain.connect(filter);
             osc.start();
             lfo.start();
+            tremoloLfo.start();
 
-            this.voices.set(touchId, { osc, gain, lfo, lfoGain });
+            this.voices.set(touchId, { osc, gain, lfo, lfoGain, tremoloLfo, tremoloGain, tremoloDepth });
+
+            // Register voice for HUD display
+            engine.registerVoice({
+                touchId,
+                noteName: '--',
+                octave: 0,
+                freq: 220,
+                waveform: 'sine'
+            });
         }
 
         const voice = this.voices.get(touchId)!;
-        const note = this.quantizeToScale(x, 3, 55, engine);
+        const note = this.quantizeToScale(x, engine.rangeOctaves, engine.rangeBaseFreq, engine);
 
         voice.osc.frequency.setTargetAtTime(note.freq, now, 0.005);
 
@@ -194,21 +222,39 @@ export class WavetableMode extends BaseSynthMode {
         const morphedWave = this.getMorphedWave(ctx, y);
         voice.osc.setPeriodicWave(morphedWave);
 
-        // Vibrato depth increases with Y (more harmonics = more modulation)
-        const maxModDepth = 30 + y * 40; // 30-70 cents
-        const modDepth = maxModDepth * 0.5;
+        // Get shake intensity from orientation params
+        const shake = engine.orientationParams.shake;
+        const isShaking = shake > SHAKE_ACCELERATION_THRESHOLD;
+        const shakeIntensity = isShaking ? Math.min(1, (shake - SHAKE_ACCELERATION_THRESHOLD) / 10) : 0;
 
-        // LFO rate increases slightly with duration
+        // Vibrato depth increases with Y and shake
+        const baseVibratoDepth = 30 + y * 40; // 30-70 cents base
+        const shakeVibratoBoost = shakeIntensity * 80; // Up to 80 cents extra on shake
+        const modDepth = baseVibratoDepth * 0.5 + shakeVibratoBoost;
+
+        // LFO rate: faster on shake for more intense effect
         const durationFactor = Math.min(1, duration / 3);
-        const lfoRate = 2 + durationFactor * 4;
+        const baseLfoRate = 2 + durationFactor * 4;
+        const lfoRate = baseLfoRate + shakeIntensity * 6; // Speed up on shake
 
         voice.lfoGain.gain.setTargetAtTime(modDepth, now, 0.05);
         voice.lfo.frequency.setTargetAtTime(lfoRate, now, 0.1);
 
-        // Update HUD
-        const freqHz = Math.round(note.freq);
+        // Tremolo: only active on shake
+        // tremoloDepth controls amplitude modulation amount (0 = none, 0.5 = ±50% volume swing)
+        const tremoloAmount = shakeIntensity * 0.4; // Up to 40% volume modulation
+        const tremoloRate = 6 + shakeIntensity * 8;  // 6-14 Hz tremolo rate
+        voice.tremoloDepth.gain.setTargetAtTime(tremoloAmount, now, 0.02);
+        voice.tremoloLfo.frequency.setTargetAtTime(tremoloRate, now, 0.05);
+
+        // Update voice registry for HUD
         const waveformName = this.getWaveformName(y);
-        engine.updateHUD(`${note.noteName}${note.octave} ${freqHz}Hz`, waveformName);
+        engine.updateVoice(touchId, {
+            noteName: note.noteName,
+            octave: note.octave,
+            freq: note.freq,
+            waveform: waveformName
+        });
     }
 
     stop(touchId: TouchId, releaseTime: number, engine: EngineContext): void {
@@ -217,12 +263,19 @@ export class WavetableMode extends BaseSynthMode {
         const voice = this.voices.get(touchId)!;
         const now = engine.ctx.currentTime;
         voice.gain.gain.setTargetAtTime(0, now, releaseTime);
+        voice.tremoloDepth.gain.setTargetAtTime(0, now, releaseTime); // Fade out tremolo
+
+        // Unregister voice from HUD immediately
+        engine.unregisterVoice(touchId);
 
         setTimeout(() => {
             this.cleanupOscillator(voice.osc);
             this.cleanupOscillator(voice.lfo);
+            this.cleanupOscillator(voice.tremoloLfo);
             this.cleanupGain(voice.gain);
             this.cleanupGain(voice.lfoGain);
+            this.cleanupGain(voice.tremoloGain);
+            this.cleanupGain(voice.tremoloDepth);
             this.voices.delete(touchId);
         }, releaseTime * 1000 + VOICE_CLEANUP_BUFFER_MS);
     }
@@ -231,8 +284,11 @@ export class WavetableMode extends BaseSynthMode {
         for (const voice of this.voices.values()) {
             this.cleanupOscillator(voice.osc);
             this.cleanupOscillator(voice.lfo);
+            this.cleanupOscillator(voice.tremoloLfo);
             this.cleanupGain(voice.gain);
             this.cleanupGain(voice.lfoGain);
+            this.cleanupGain(voice.tremoloGain);
+            this.cleanupGain(voice.tremoloDepth);
         }
         this.voices.clear();
     }

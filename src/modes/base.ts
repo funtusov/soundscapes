@@ -2,7 +2,7 @@
  * Base interface and types for synthesis modes
  */
 
-import type { TouchId, NoteInfo } from '../types';
+import type { TouchId, NoteInfo, VoiceDisplayInfo } from '../types';
 import { MAX_VOICES, VOICE_GAIN, VOICE_CLEANUP_BUFFER_MS, NOTE_NAMES, SCALE_PATTERNS } from '../constants';
 
 /**
@@ -18,6 +18,9 @@ export interface EngineContext {
     isQuantized: boolean;
     tonic: number;
     scaleType: string;
+    // Frequency range
+    rangeOctaves: number;
+    rangeBaseFreq: number;
     // Orientation parameters (for continuous modes)
     orientationParams: {
         pan: number;
@@ -26,8 +29,12 @@ export interface EngineContext {
         shake: number;
         compass: number;
     };
-    // HUD update callback
+    // HUD update callback (deprecated - use voice registry)
     updateHUD: (freq: string, harm: string) => void;
+    // Voice registry for multi-voice HUD display
+    registerVoice: (info: VoiceDisplayInfo) => void;
+    updateVoice: (touchId: TouchId, info: Partial<VoiceDisplayInfo>) => void;
+    unregisterVoice: (touchId: TouchId) => void;
     // Reverb control callback (for Oneheart mode)
     setReverb?: (decay: number, wet: number, dry: number) => void;
     // Reverb wet mix control (for relaxation depth control)

@@ -45,7 +45,7 @@ import { getMode, type SynthMode, type EngineContext } from './modes';
 import { BeatEngine } from './beats/BeatEngine';
 
 // Import types from centralized type definitions
-import type { TouchId, TextureNodes } from './types';
+import type { TouchId, TextureNodes, VoiceDisplayInfo } from './types';
 import type { OrientationParams, NoteInfo, ModeNodes } from './types';
 
 // Declare global webkitAudioContext for Safari compatibility
@@ -69,13 +69,21 @@ export class AudioEngine {
     analyser: AnalyserNode | null = null;
     isPlaying = false;
     dataArray: Float32Array | null = null;
-    mode: SynthesisMode = 'focus';
+    mode: SynthesisMode = 'wavetable';
     nodes: ModeNodes = {};
     touches = new Map<TouchId, unknown>();
     orientationParams: OrientationParams = { pan: 0, filterMod: 0, lfoRate: 0, shake: 0, compass: 0 };
-    isQuantized = false;
-    tonic = 9; // A
-    scaleType = 'minor';
+    isQuantized = true;
+    tonic = 7; // G
+    scaleType = 'pent_min';
+
+    // Frequency range presets (octaves, baseFreq)
+    private rangePresets = [
+        { name: 'Tight', octaves: 1.5, baseFreq: 98 },    // G2-D4, precise control
+        { name: 'Medium', octaves: 3, baseFreq: 98 },     // G2-G5, balanced
+        { name: 'Wide', octaves: 5, baseFreq: 49 },       // G1-G6, full range
+    ] as const;
+    rangeIndex = 1; // Default to Medium
     scale = [0, 3, 5, 7, 10, 12, 15, 17, 19, 22, 24];
     silentAudio: HTMLAudioElement;
 
@@ -89,6 +97,9 @@ export class AudioEngine {
     tapeHissEnabled = false;
     noiseType: NoiseType = 'waves';
     textureVolume = DEFAULT_TEXTURE_VOLUME;
+
+    // Voice display registry for HUD
+    private voiceRegistry = new Map<TouchId, VoiceDisplayInfo>();
 
 
     // Reverb effect chain
@@ -211,8 +222,13 @@ export class AudioEngine {
             isQuantized: this.isQuantized,
             tonic: this.tonic,
             scaleType: this.scaleType,
+            rangeOctaves: this.rangePresets[this.rangeIndex].octaves,
+            rangeBaseFreq: this.rangePresets[this.rangeIndex].baseFreq,
             orientationParams: this.orientationParams,
             updateHUD: (freq, harm) => this.updateHUD(freq, harm),
+            registerVoice: (info) => this.registerVoice(info),
+            updateVoice: (touchId, info) => this.updateVoice(touchId, info),
+            unregisterVoice: (touchId) => this.unregisterVoice(touchId),
             setReverb: (decay, wet, dry) => this.setReverbParams(decay, wet, dry),
             setReverbWet: (wet) => this.setReverbWet(wet),
         };
@@ -450,6 +466,9 @@ export class AudioEngine {
         // Mode classes now handle their own cleanup via cleanup() method
         // This just resets the shared nodes reference
         this.nodes = {};
+        // Clear voice registry when switching modes
+        this.voiceRegistry.clear();
+        this.renderVoiceList();
     }
 
     /** Set mood for oneheart mode - now deprecated, use initMode('focus') or initMode('relaxation') */
@@ -775,11 +794,49 @@ export class AudioEngine {
 
     // ============ COMMON METHODS ============
 
-    private updateHUD(freq: string, harm: string): void {
-        const freqEl = document.getElementById('val-freq');
-        const harmEl = document.getElementById('val-harm');
-        if (freqEl) freqEl.innerText = freq;
-        if (harmEl) harmEl.innerText = harm;
+    /** @deprecated Use registerVoice/unregisterVoice instead */
+    private updateHUD(_freq: string, _harm: string): void {
+        // Legacy method - voice display now handled by voice registry
+    }
+
+    /** Register a voice for HUD display */
+    registerVoice(info: VoiceDisplayInfo): void {
+        this.voiceRegistry.set(info.touchId, info);
+        this.renderVoiceList();
+    }
+
+    /** Update an existing voice's display info */
+    updateVoice(touchId: TouchId, info: Partial<VoiceDisplayInfo>): void {
+        const existing = this.voiceRegistry.get(touchId);
+        if (existing) {
+            this.voiceRegistry.set(touchId, { ...existing, ...info });
+            this.renderVoiceList();
+        }
+    }
+
+    /** Unregister a voice from HUD display */
+    unregisterVoice(touchId: TouchId): void {
+        this.voiceRegistry.delete(touchId);
+        this.renderVoiceList();
+    }
+
+    /** Render the voice list to the HUD */
+    private renderVoiceList(): void {
+        const container = document.getElementById('voiceList');
+        if (!container) return;
+
+        if (this.voiceRegistry.size === 0) {
+            container.innerHTML = '<div class="voice-placeholder">--</div>';
+            return;
+        }
+
+        // Sort voices by touchId for consistent ordering
+        const voices = Array.from(this.voiceRegistry.values())
+            .sort((a, b) => String(a.touchId).localeCompare(String(b.touchId)));
+
+        container.innerHTML = voices.map(v =>
+            `<div class="voice-entry"><span class="note">${v.noteName}${v.octave}</span> <span class="freq">${Math.round(v.freq)}Hz</span> <span class="wave">/ ${v.waveform}</span></div>`
+        ).join('');
     }
 
     quantizeToScale(x: number, octaves = 3, baseFreq = 55): NoteInfo {
@@ -824,6 +881,23 @@ export class AudioEngine {
 
     setScaleType(scaleType: string): void {
         this.scaleType = scaleType;
+    }
+
+    /** Cycle through frequency range presets */
+    cycleRange(): { name: string; octaves: number; baseFreq: number } {
+        this.rangeIndex = (this.rangeIndex + 1) % this.rangePresets.length;
+        return this.rangePresets[this.rangeIndex];
+    }
+
+    /** Get current range preset */
+    getRange(): { name: string; octaves: number; baseFreq: number } {
+        return this.rangePresets[this.rangeIndex];
+    }
+
+    /** Get range info for visualizer (octave count and positions) */
+    getRangeInfo(): { octaves: number; baseFreq: number; name: string } {
+        const preset = this.rangePresets[this.rangeIndex];
+        return { octaves: preset.octaves, baseFreq: preset.baseFreq, name: preset.name };
     }
 
     resume(): void {
