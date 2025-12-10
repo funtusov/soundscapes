@@ -1,6 +1,6 @@
 /**
- * AUDIO ENGINE - Multi-mode Synthesizer
- * Coordinates mode classes and provides shared audio infrastructure
+ * AUDIO ENGINE - Wavetable Synthesizer
+ * Provides shared audio infrastructure for the wavetable synthesis mode
  */
 
 import {
@@ -26,10 +26,8 @@ import {
     NOTE_NAMES,
     SCALE_PATTERNS,
     clamp,
-    type SynthesisMode,
     type ReverbLevel,
     type TouchCategory,
-    type OneheartMood,
     // Texture imports
     NOISE_TEXTURE_SETTINGS,
     NOISE_TYPES,
@@ -43,9 +41,6 @@ import {
 
 // Import mode system
 import { getMode, type SynthMode, type EngineContext } from './modes';
-
-// Import beat engine
-import { BeatEngine } from './beats/BeatEngine';
 
 // Import types from centralized type definitions
 import type { TouchId, TextureNodes, VoiceDisplayInfo } from './types';
@@ -72,7 +67,6 @@ export class AudioEngine {
     analyser: AnalyserNode | null = null;
     isPlaying = false;
     dataArray: Float32Array | null = null;
-    mode: SynthesisMode = 'wavetable';
     nodes: ModeNodes = {};
     touches = new Map<TouchId, unknown>();
     orientationParams: OrientationParams = { pan: 0, filterMod: 0, lfoRate: 0, shake: 0, compass: 0 };
@@ -90,9 +84,6 @@ export class AudioEngine {
     scale = [0, 3, 5, 7, 10, 12, 15, 17, 19, 22, 24];
     silentAudio: HTMLAudioElement;
 
-    // Oneheart mode state (for backwards compatibility)
-    oneheartMood: OneheartMood = 'focus';
-
     // Texture state
     noiseNodes: TextureNodes | null = null;
     tapeHissNodes: TextureNodes | null = null;
@@ -109,7 +100,7 @@ export class AudioEngine {
 
     // Arpeggio state
     arpEnabled = false;
-    arpRate = 2; // Notes per second
+    arpRate = 4; // Notes per second
 
     // Reverb effect chain
     private convolver: ConvolverNode | null = null;
@@ -122,11 +113,8 @@ export class AudioEngine {
     private currentFilterFreq: number = FILTER_MAX_FREQ;
     private releaseFilterTarget: number = FILTER_MIN_FREQ;
 
-    // Current mode instance (from mode registry)
+    // Current mode instance
     private currentMode: SynthMode | null = null;
-
-    // Beat engine (runs independently of mode)
-    beatEngine: BeatEngine | null = null;
 
     constructor() {
         // Silent audio for iOS unlock
@@ -201,11 +189,7 @@ export class AudioEngine {
         delayL.connect(this.analyser);
         delayR.connect(this.analyser);
 
-        // Initialize beat engine (routes to analyser, bypassing delay AND reverb)
-        this.beatEngine = new BeatEngine();
-        this.beatEngine.init(this.ctx, this.analyser);
-
-        this.initMode(this.mode);
+        this.initMode();
     }
 
     // ============ VOICE COUNT HELPERS ============
@@ -246,26 +230,18 @@ export class AudioEngine {
         };
     }
 
-    initMode(mode: SynthesisMode): void {
+    initMode(): void {
         // Cleanup previous mode
         if (this.currentMode) {
             this.currentMode.cleanup();
         }
         this.cleanupMode();
-        this.mode = mode;
 
-        // Get mode instance from registry
-        const modeInstance = getMode(mode);
+        // Get wavetable mode instance
+        const modeInstance = getMode();
         if (modeInstance && this.ctx && this.filter && this.masterGain) {
             this.currentMode = modeInstance;
             this.currentMode.init(this.getEngineContext());
-        }
-
-        // Set mood for focus/relaxation modes
-        if (mode === 'focus') {
-            this.oneheartMood = 'focus';
-        } else if (mode === 'relaxation') {
-            this.oneheartMood = 'relaxation';
         }
     }
 
@@ -457,7 +433,7 @@ export class AudioEngine {
         return nextLevel;
     }
 
-    /** Set reverb wet mix directly (for relaxation depth control) */
+    /** Set reverb wet mix directly */
     setReverbWet(wet: number): void {
         if (!this.ctx || !this.reverbWetGain) return;
         const now = this.ctx.currentTime;
@@ -470,30 +446,12 @@ export class AudioEngine {
         const now = this.ctx.currentTime;
         this.reverbWetGain.gain.setTargetAtTime(clamp(wet, 0, 1), now, 0.3);
         this.reverbDryGain.gain.setTargetAtTime(clamp(dry, 0, 1), now, 0.3);
-        // Note: decay parameter would require regenerating the impulse response
-        // For now, we just adjust wet/dry mix
     }
 
     cleanupMode(): void {
-        // Mode classes now handle their own cleanup via cleanup() method
-        // This just resets the shared nodes reference
         this.nodes = {};
-        // Clear voice registry when switching modes
         this.voiceRegistry.clear();
         this.renderVoiceList();
-    }
-
-    /** Set mood for oneheart mode - now deprecated, use initMode('focus') or initMode('relaxation') */
-    setOneheartMood(mood: OneheartMood): void {
-        // Mood is now set by selecting mode directly
-        // This method is kept for backwards compatibility but switches mode instead
-        if (this.oneheartMood === mood) return;
-        const newMode = mood === 'focus' ? 'focus' : 'relaxation';
-        this.initMode(newMode);
-    }
-
-    getOneheartMood(): OneheartMood {
-        return this.oneheartMood;
     }
 
     // ============ TEXTURE GENERATORS ============
@@ -519,11 +477,9 @@ export class AudioEngine {
         if (!this.ctx || !this.filter) return this.noiseEnabled;
 
         if (this.noiseEnabled) {
-            // Turn off
             this.stopNoise();
             this.noiseEnabled = false;
         } else {
-            // Turn on
             this.startNoise();
             this.noiseEnabled = true;
         }
@@ -549,7 +505,6 @@ export class AudioEngine {
         const nextIndex = (currentIndex + 1) % NOISE_TYPES.length;
         this.noiseType = NOISE_TYPES[nextIndex];
 
-        // If noise is playing, restart with new type
         if (this.noiseEnabled) {
             this.stopNoise();
             this.startNoise();
@@ -562,7 +517,6 @@ export class AudioEngine {
         if (this.noiseType === type) return;
         this.noiseType = type;
 
-        // If noise is playing, restart with new type
         if (this.noiseEnabled) {
             this.stopNoise();
             this.startNoise();
@@ -576,7 +530,6 @@ export class AudioEngine {
     setTextureVolume(volume: number): void {
         this.textureVolume = Math.max(0, Math.min(1, volume));
 
-        // Update noise volume if playing
         if (this.noiseNodes && this.ctx) {
             const settings = NOISE_TEXTURE_SETTINGS[this.noiseType];
             const baseGain = settings.baseGain * this.textureVolume;
@@ -587,7 +540,6 @@ export class AudioEngine {
             }
         }
 
-        // Update tape hiss volume if playing
         if (this.tapeHissNodes && this.ctx) {
             const baseGain = TAPE_HISS_SETTINGS.baseGain * this.textureVolume;
             const now = this.ctx.currentTime;
@@ -608,36 +560,29 @@ export class AudioEngine {
         const settings = NOISE_TEXTURE_SETTINGS[this.noiseType];
         const noiseBuffer = this.createNoiseBuffer(4);
 
-        // Create noise source
         const noiseSource = this.ctx.createBufferSource();
         noiseSource.buffer = noiseBuffer;
         noiseSource.loop = true;
 
-        // Create filter (lowpass for warmer sound)
         const noiseFilter = this.ctx.createBiquadFilter();
         noiseFilter.type = 'lowpass';
         noiseFilter.frequency.value = settings.filterFreq;
         noiseFilter.Q.value = 0.7;
 
-        // Create gain node with texture volume applied
         const baseGain = settings.baseGain * this.textureVolume;
         const noiseGain = this.ctx.createGain();
         noiseGain.gain.value = baseGain * (1 - settings.lfoDepth);
 
-        // Create LFO for wave-like modulation
         const lfo = this.ctx.createOscillator();
         lfo.type = 'sine';
         lfo.frequency.value = settings.lfoRate;
 
-        // LFO gain controls modulation depth
         const lfoGain = this.ctx.createGain();
         lfoGain.gain.value = baseGain * settings.lfoDepth;
 
-        // Connect LFO to gain's gain parameter for amplitude modulation
         lfo.connect(lfoGain);
         lfoGain.connect(noiseGain.gain);
 
-        // Connect: noise -> filter -> gain -> master filter
         noiseSource.connect(noiseFilter);
         noiseFilter.connect(noiseGain);
         noiseGain.connect(this.filter);
@@ -659,11 +604,8 @@ export class AudioEngine {
         if (!this.noiseNodes || !this.ctx) return;
 
         const now = this.ctx.currentTime;
-
-        // Fade out
         this.noiseNodes.gain.gain.setTargetAtTime(0, now, 0.3);
 
-        // Stop after fade
         const nodes = this.noiseNodes;
         setTimeout(() => {
             if (nodes.noiseSource) {
@@ -672,7 +614,6 @@ export class AudioEngine {
                     nodes.noiseSource.disconnect();
                 } catch (e) { /* ignore */ }
             }
-            // Cleanup LFO nodes
             if (nodes.lfo) {
                 try {
                     nodes.lfo.stop();
@@ -697,11 +638,9 @@ export class AudioEngine {
         if (!this.ctx || !this.filter) return this.tapeHissEnabled;
 
         if (this.tapeHissEnabled) {
-            // Turn off
             this.stopTapeHiss();
             this.tapeHissEnabled = false;
         } else {
-            // Turn on
             this.startTapeHiss();
             this.tapeHissEnabled = true;
         }
@@ -714,41 +653,33 @@ export class AudioEngine {
 
         const noiseBuffer = this.createNoiseBuffer(3);
 
-        // Create noise source
         const noiseSource = this.ctx.createBufferSource();
         noiseSource.buffer = noiseBuffer;
         noiseSource.loop = true;
 
-        // Create highpass filter (removes low rumble)
         const highpass = this.ctx.createBiquadFilter();
         highpass.type = 'highpass';
         highpass.frequency.value = TAPE_HISS_SETTINGS.filterLow;
         highpass.Q.value = 0.3;
 
-        // Create lowpass filter (removes harsh highs)
         const lowpass = this.ctx.createBiquadFilter();
         lowpass.type = 'lowpass';
         lowpass.frequency.value = TAPE_HISS_SETTINGS.filterHigh;
         lowpass.Q.value = 0.3;
 
-        // Create gain with base level (minimum when LFO is at bottom)
         const tapeGain = this.ctx.createGain();
         tapeGain.gain.value = TAPE_HISS_SETTINGS.baseGain * (1 - TAPE_HISS_SETTINGS.lfoDepth);
 
-        // Create LFO for slow wave-like modulation
         const lfo = this.ctx.createOscillator();
         lfo.type = 'sine';
         lfo.frequency.value = TAPE_HISS_SETTINGS.lfoRate;
 
-        // LFO gain controls modulation depth
         const lfoGain = this.ctx.createGain();
         lfoGain.gain.value = TAPE_HISS_SETTINGS.baseGain * TAPE_HISS_SETTINGS.lfoDepth;
 
-        // Connect LFO to gain's gain parameter for amplitude modulation
         lfo.connect(lfoGain);
         lfoGain.connect(tapeGain.gain);
 
-        // Connect: noise -> highpass -> lowpass -> gain -> master filter
         noiseSource.connect(highpass);
         highpass.connect(lowpass);
         lowpass.connect(tapeGain);
@@ -772,11 +703,8 @@ export class AudioEngine {
         if (!this.tapeHissNodes || !this.ctx) return;
 
         const now = this.ctx.currentTime;
-
-        // Fade out
         this.tapeHissNodes.gain.gain.setTargetAtTime(0, now, 0.3);
 
-        // Stop after fade
         const nodes = this.tapeHissNodes;
         setTimeout(() => {
             if (nodes.noiseSource) {
@@ -785,7 +713,6 @@ export class AudioEngine {
                     nodes.noiseSource.disconnect();
                 } catch (e) { /* ignore */ }
             }
-            // Cleanup LFO nodes
             if (nodes.lfo) {
                 try {
                     nodes.lfo.stop();
@@ -810,7 +737,6 @@ export class AudioEngine {
     setVolume(level: number): void {
         if (!this.ctx || !this.masterGain) return;
 
-        // level is 0-100, convert to gain 0-1
         const gain = clamp(level / 100, 0, 1);
         const now = this.ctx.currentTime;
 
@@ -855,7 +781,6 @@ export class AudioEngine {
             return;
         }
 
-        // Sort voices by touchId for consistent ordering
         const voices = Array.from(this.voiceRegistry.values())
             .sort((a, b) => String(a.touchId).localeCompare(String(b.touchId)));
 
@@ -980,22 +905,8 @@ export class AudioEngine {
 
         const now = this.ctx!.currentTime;
 
-        // Beats mode: touch just sets pattern, play/stop via button
-        if (this.mode === 'beats') {
-            // Auto-start beats on first touch if not playing
-            if (this.beatEngine && !this.beatEngine.getIsPlaying()) {
-                this.beatEngine.start();
-            }
-            return;
-        }
-
-        // Delegate to mode class if available
+        // Delegate to mode class
         if (this.currentMode) {
-            // Continuous modes manage their own master gain
-            if (this.currentMode.isContinuous) {
-                this.currentMode.start(touchId, this.getEngineContext());
-                return;
-            }
             this.currentMode.start(touchId, this.getEngineContext());
         }
 
@@ -1009,25 +920,11 @@ export class AudioEngine {
         if (!this.ctx) return;
         const now = this.ctx.currentTime;
 
-        // Beats mode: lifting finger doesn't stop the beat
-        if (this.mode === 'beats') {
-            return;
-        }
-
-        // Get touch category and profile for release shaping
         const category = this.getTouchCategory(duration);
         const profile = TOUCH_PROFILES[category];
         const releaseTime = profile.releaseTime;
 
-        // Delegate to mode class if available
         if (this.currentMode) {
-            // Continuous modes don't stop on touch end
-            if (this.currentMode.isContinuous) {
-                this.currentMode.stop(touchId, releaseTime, this.getEngineContext());
-                return;
-            }
-
-            // Apply filter and reverb release shaping
             this.applyReleaseEnvelope(duration);
             this.currentMode.stop(touchId, releaseTime, this.getEngineContext());
 
@@ -1035,28 +932,15 @@ export class AudioEngine {
                 this.masterGain.gain.setTargetAtTime(0, now, releaseTime);
                 this.isPlaying = false;
             }
-            return;
         }
     }
 
     update(x: number, y: number, touchId: TouchId = 0, duration = 0): void {
         if (!this.ctx) return;
 
-        // Input validation - clamp coordinates to [0, 1]
         const clampedX = clamp(x, 0, 1);
         const clampedY = clamp(y, 0, 1);
 
-        // Beats mode: control pattern with X/Y
-        if (this.mode === 'beats' && this.beatEngine) {
-            this.beatEngine.setPattern(clampedX, clampedY);
-            // Update HUD with pattern info
-            const densityLabel = clampedX < 0.3 ? 'Simple' : clampedX < 0.7 ? 'Medium' : 'Complex';
-            const punchLabel = clampedY < 0.3 ? 'Deep' : clampedY < 0.7 ? 'Balanced' : 'Punchy';
-            this.updateHUD(densityLabel, punchLabel);
-            return;
-        }
-
-        // Delegate to mode class if available
         if (this.currentMode) {
             this.currentMode.update(clampedX, clampedY, touchId, duration, this.getEngineContext());
         }
@@ -1084,20 +968,17 @@ export class AudioEngine {
         if (!this.ctx || !this.filter) return;
         const now = this.ctx.currentTime;
 
-        // Beta (forward/back tilt) controls filter cutoff
         const clampedBeta = clamp(beta || 0, 0, 90);
         const filterMod = clampedBeta / 90;
         this.orientationParams.filterMod = filterMod;
 
         const tiltCutoff = FILTER_MIN_FREQ * Math.pow(FILTER_MAX_FREQ / FILTER_MIN_FREQ, 1 - filterMod);
-        this.currentFilterFreq = tiltCutoff; // Track for release envelope
+        this.currentFilterFreq = tiltCutoff;
         this.filter.frequency.setTargetAtTime(tiltCutoff, now, 0.1);
 
-        // Alpha (compass heading) - currently unused, reserved for future use
         const compassHeading = alpha ?? 0;
         this.orientationParams.compass = compassHeading;
 
-        // Update UI indicators
         const tiltEl = document.getElementById('val-tilt');
         if (tiltEl) {
             tiltEl.innerText = `${Math.round(tiltCutoff)}Hz`;

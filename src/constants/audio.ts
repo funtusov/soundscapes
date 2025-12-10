@@ -276,19 +276,7 @@ export const ADSR_PRESETS: ADSRPreset[] = [
 // ============ SYNTHESIS MODE TYPES ============
 
 /** Available synthesis modes */
-export const SYNTHESIS_MODES = [
-    'wavetable',
-    'drone',
-    'fm',
-    'arpeggiator',
-    'karplus',
-    'formant',
-    'ambient',
-    'bassline',
-    'focus',
-    'relaxation',
-    'beats'
-] as const;
+export const SYNTHESIS_MODES = ['wavetable'] as const;
 
 export type SynthesisMode = typeof SYNTHESIS_MODES[number];
 
