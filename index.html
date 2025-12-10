@@ -30,37 +30,43 @@
     <!-- Scale Controls -->
     <div class="scale-controls" id="scaleControls" style="display: none;">
         <button class="range-btn" id="rangeBtn">Medium</button>
-        <button class="quantize-btn" id="quantizeBtn">Quantize</button>
-        <button class="envelope-btn" id="envelopeBtn">Pad</button>
-        <div class="scale-options" id="scaleOptions">
-            <select id="tonicSelect" class="scale-select">
-                <option value="0">C</option>
-                <option value="1">C#</option>
-                <option value="2">D</option>
-                <option value="3">D#</option>
-                <option value="4">E</option>
-                <option value="5">F</option>
-                <option value="6">F#</option>
-                <option value="7" selected>G</option>
-                <option value="8">G#</option>
-                <option value="9">A</option>
-                <option value="10">A#</option>
-                <option value="11">B</option>
-            </select>
-            <select id="scaleSelect" class="scale-select">
-                <option value="major">Major</option>
-                <option value="minor">Minor</option>
-                <option value="pent_maj">Pent Maj</option>
-                <option value="pent_min" selected>Pent Min</option>
-                <option value="blues">Blues</option>
-                <option value="dorian">Dorian</option>
-                <option value="lydian">Lydian</option>
-                <option value="mixolydian">Mixo</option>
-                <option value="harm_min">Harm Min</option>
-                <option value="whole_tone">Whole</option>
-                <option value="chromatic">Chromatic</option>
-            </select>
+
+        <!-- Quantize: collapsed summary or expanded options -->
+        <div class="quantize-control" id="quantizeControl">
+            <button class="quantize-summary" id="quantizeSummary">Free</button>
+            <div class="quantize-options" id="quantizeOptions">
+                <button class="quantize-off-btn" id="quantizeOffBtn">Off</button>
+                <select id="tonicSelect" class="scale-select">
+                    <option value="0">C</option>
+                    <option value="1">C#</option>
+                    <option value="2">D</option>
+                    <option value="3">D#</option>
+                    <option value="4">E</option>
+                    <option value="5">F</option>
+                    <option value="6">F#</option>
+                    <option value="7" selected>G</option>
+                    <option value="8">G#</option>
+                    <option value="9">A</option>
+                    <option value="10">A#</option>
+                    <option value="11">B</option>
+                </select>
+                <select id="scaleSelect" class="scale-select">
+                    <option value="major">Major</option>
+                    <option value="minor">Minor</option>
+                    <option value="pent_maj">Pent Maj</option>
+                    <option value="pent_min" selected>Pent Min</option>
+                    <option value="blues">Blues</option>
+                    <option value="dorian">Dorian</option>
+                    <option value="lydian">Lydian</option>
+                    <option value="mixolydian">Mixo</option>
+                    <option value="harm_min">Harm Min</option>
+                    <option value="whole_tone">Whole</option>
+                    <option value="chromatic">Chromatic</option>
+                </select>
+            </div>
         </div>
+
+        <button class="envelope-btn" id="envelopeBtn">Pad</button>
     </div>
 
     <!-- Loop Controls -->
@@ -91,34 +97,30 @@
         </div>
     </div>
 
-    <!-- Texture Controls (secondary bar when active) -->
-    <div class="texture-controls" id="textureControls" style="display: none;">
-        <button class="texture-btn" id="noiseBtn">Waves</button>
-        <button class="texture-btn" id="tapeBtn">Tape</button>
-        <div class="volume-control">
-            <span class="volume-label">Tex</span>
-            <input type="range" id="textureVolumeSlider" min="0" max="100" value="20" class="volume-slider">
+    <!-- Main bottom bar -->
+    <div class="mode-selector" id="modeSelector" style="display: none;">
+        <button class="effect-btn" id="reverbBtn">Reverb</button>
+
+        <!-- Noise: collapsible control -->
+        <div class="noise-control" id="noiseControl">
+            <button class="noise-summary" id="noiseSummary">Ambience</button>
+            <div class="noise-options" id="noiseOptions">
+                <button class="noise-type-btn" data-type="off">Off</button>
+                <button class="noise-type-btn" data-type="waves">Waves</button>
+                <button class="noise-type-btn" data-type="rain">Rain</button>
+                <button class="noise-type-btn" data-type="wind">Wind</button>
+                <button class="noise-type-btn" data-type="fire">Fire</button>
+                <div class="noise-volume">
+                    <input type="range" id="textureVolumeSlider" min="0" max="100" value="20" class="noise-slider">
+                </div>
+            </div>
         </div>
+
         <div class="volume-control">
             <span class="volume-label">Vol</span>
             <input type="range" id="volumeSlider" min="0" max="100" value="100" class="volume-slider">
         </div>
-    </div>
 
-    <!-- Mode Selector (main bottom bar) -->
-    <div class="mode-selector" id="modeSelector" style="display: none;">
-        <select class="mode-select" id="modeSelect">
-            <option value="wavetable" selected>Wave</option>
-            <option value="focus">Focus</option>
-            <option value="relaxation">Relax</option>
-            <option value="beats">Beats</option>
-            <option value="fm">FM</option>
-            <option value="arpeggiator">Arp</option>
-            <option value="karplus">String</option>
-            <option value="formant">Voice</option>
-            <option value="ambient">Ambient</option>
-        </select>
-        <button class="effect-btn" id="reverbBtn">Reverb</button>
         <button class="loop-toggle-btn" id="loopToggleBtn" title="Loop">⟳</button>
     </div>
 

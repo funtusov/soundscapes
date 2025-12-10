@@ -525,6 +525,19 @@ export class AudioEngine {
         return this.noiseEnabled;
     }
 
+    setNoiseEnabled(enabled: boolean): void {
+        if (!this.ctx || !this.filter) return;
+        if (enabled === this.noiseEnabled) return;
+
+        if (enabled) {
+            this.startNoise();
+            this.noiseEnabled = true;
+        } else {
+            this.stopNoise();
+            this.noiseEnabled = false;
+        }
+    }
+
     cycleNoiseType(): NoiseType {
         const currentIndex = NOISE_TYPES.indexOf(this.noiseType);
         const nextIndex = (currentIndex + 1) % NOISE_TYPES.length;
@@ -887,6 +900,11 @@ export class AudioEngine {
 
     setScaleType(scaleType: string): void {
         this.scaleType = scaleType;
+    }
+
+    /** Get current scale pattern (array of semitone offsets) */
+    getScalePattern(): number[] {
+        return SCALE_PATTERNS[this.scaleType] || SCALE_PATTERNS.pent_min;
     }
 
     /** Cycle through frequency range presets */

@@ -38,7 +38,6 @@ function initApp(e?: Event) {
     document.getElementById('modeSelector')!.style.display = 'flex';
     document.getElementById('scaleControls')!.style.display = 'flex';
     // Loop controls start hidden (toggle via button)
-    document.getElementById('textureControls')!.style.display = (audio.mode === 'focus' || audio.mode === 'relaxation' || audio.mode === 'wavetable') ? 'flex' : 'none';
 
     // Initialize UI
     initModeSelector(audio);

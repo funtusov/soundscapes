@@ -137,7 +137,11 @@ export class LoopRecorder {
 
     executeEvent(event: LoopEvent, loopCount: number) {
         // Create unique touch ID for this playback instance
-        const playbackTouchId = LOOP_TOUCH_ID_OFFSET + Number(event.touchId) + (loopCount * LOOP_ITERATION_OFFSET);
+        // Handle string touch IDs (like 'mouse') by hashing them to a number
+        const touchIdNum = typeof event.touchId === 'string'
+            ? event.touchId.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
+            : Number(event.touchId);
+        const playbackTouchId = LOOP_TOUCH_ID_OFFSET + touchIdNum + (loopCount * LOOP_ITERATION_OFFSET);
 
         switch (event.type) {
             case 'start':

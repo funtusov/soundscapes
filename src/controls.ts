@@ -5,7 +5,7 @@
 import { addRipple, setCursor, removeCursor, getCanvasSize } from './visualizer';
 import { LoopRecorder } from './LoopRecorder';
 import type { AudioEngine } from './AudioEngine';
-import { clamp, TOUCH_TAP_MAX_DURATION, TOUCH_PRESS_MAX_DURATION, type SynthesisMode } from './constants';
+import { clamp, TOUCH_TAP_MAX_DURATION, TOUCH_PRESS_MAX_DURATION, type NoiseType } from './constants';
 import { haptic } from 'ios-haptics';
 
 interface TouchData {
@@ -42,16 +42,10 @@ const activeTouches = new Map<TouchId, TouchData>();
 let loopRecorder: LoopRecorder | null = null;
 
 /**
- * Update scale controls elevation based on whether secondary bar (texture/beats) is visible
+ * Update scale controls elevation based on whether secondary bar is visible
  */
-export function updateScaleControlsPosition(audio: AudioEngine): void {
-    const scaleControls = document.getElementById('scaleControls');
-    if (!scaleControls) return;
-
-    // Secondary bar is visible for these modes
-    const hasSecondaryBar = audio.mode === 'focus' || audio.mode === 'relaxation' ||
-                           audio.mode === 'wavetable' || audio.mode === 'beats';
-    scaleControls.classList.toggle('elevated', hasSecondaryBar);
+export function updateScaleControlsPosition(_audio: AudioEngine): void {
+    // Scale controls no longer need elevation - only one bar now
 }
 
 export function initControls(audio: AudioEngine) {
@@ -209,49 +203,131 @@ function handleEnd(touchId: TouchId, audio: AudioEngine) {
     audio.stop(touchId, duration);
 }
 
-export function initModeSelector(audio: AudioEngine) {
-    const select = document.getElementById('modeSelect') as HTMLSelectElement;
-    if (!select) return;
-
-    select.addEventListener('change', (e) => {
-        e.stopPropagation();
-        const mode = select.value as SynthesisMode;
-        audio.initMode(mode);
-    });
+export function initModeSelector(_audio: AudioEngine) {
+    // Mode selector removed - only wavetable mode for now
 }
 
 export function initScaleControls(audio: AudioEngine) {
-    const quantizeBtn = document.getElementById('quantizeBtn')!;
-    const scaleOptions = document.getElementById('scaleOptions')!;
+    const quantizeSummary = document.getElementById('quantizeSummary')!;
+    const quantizeOptions = document.getElementById('quantizeOptions')!;
+    const quantizeOffBtn = document.getElementById('quantizeOffBtn')!;
     const tonicSelect = document.getElementById('tonicSelect') as HTMLSelectElement;
     const scaleSelect = document.getElementById('scaleSelect') as HTMLSelectElement;
 
-    // Toggle quantization
-    const handleQuantizeToggle = (e: Event) => {
+    // Scale type short names for display
+    const scaleShortNames: Record<string, string> = {
+        major: 'maj',
+        minor: 'min',
+        pent_maj: 'pent',
+        pent_min: 'pent',
+        blues: 'blues',
+        dorian: 'dor',
+        lydian: 'lyd',
+        mixolydian: 'mixo',
+        harm_min: 'harm',
+        whole_tone: 'whole',
+        chromatic: 'chr'
+    };
+
+    // Note names
+    const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+    // Update summary button text
+    const updateSummary = () => {
+        if (!audio.isQuantized) {
+            quantizeSummary.textContent = 'Quantize';
+            quantizeSummary.classList.remove('active');
+            quantizeOffBtn.classList.add('active');
+        } else {
+            const tonic = noteNames[parseInt(tonicSelect.value, 10)];
+            const scaleType = scaleSelect.value;
+            const shortName = scaleShortNames[scaleType] || scaleType;
+            // Show minor indicator for minor scales
+            const minorIndicator = scaleType === 'minor' || scaleType === 'pent_min' || scaleType === 'harm_min' ? 'm' : '';
+            quantizeSummary.textContent = `${tonic}${minorIndicator} ${shortName}`;
+            quantizeSummary.classList.add('active');
+            quantizeOffBtn.classList.remove('active');
+        }
+    };
+
+    // Handle summary button click
+    let justTouched = false;
+    const handleSummaryClick = (e: Event) => {
         e.stopPropagation();
         e.preventDefault();
 
-        const isQuantized = !audio.isQuantized;
-        audio.setQuantized(isQuantized);
+        // Prevent double-firing on touch devices
+        if (e.type === 'touchend') {
+            justTouched = true;
+            setTimeout(() => { justTouched = false; }, 100);
+        } else if (e.type === 'click' && justTouched) {
+            return;
+        }
 
-        quantizeBtn.classList.toggle('active', isQuantized);
-        scaleOptions.classList.toggle('visible', isQuantized);
+        if (!audio.isQuantized) {
+            // If off, turn on quantization with current settings
+            audio.setQuantized(true);
+            updateSummary();
+        } else {
+            // If on, toggle options panel
+            quantizeOptions.classList.toggle('expanded');
+        }
     };
 
-    quantizeBtn.addEventListener('click', handleQuantizeToggle);
-    quantizeBtn.addEventListener('touchend', handleQuantizeToggle);
+    // Close options panel
+    const closeOptions = () => {
+        quantizeOptions.classList.remove('expanded');
+    };
 
-    tonicSelect.addEventListener('change', () => {
+    // Handle "Off" button (turn off quantization)
+    let justTouchedOff = false;
+    const handleQuantizeOff = (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
+
+        // Prevent double-firing on touch devices
+        if (e.type === 'touchend') {
+            justTouchedOff = true;
+            setTimeout(() => { justTouchedOff = false; }, 100);
+        } else if (e.type === 'click' && justTouchedOff) {
+            return;
+        }
+
+        audio.setQuantized(false);
+        updateSummary();
+        closeOptions();
+    };
+
+    // Handle tonic/scale change (enable quantization if not already)
+    const handleScaleChange = () => {
+        if (!audio.isQuantized) {
+            audio.setQuantized(true);
+        }
         audio.setTonic(tonicSelect.value);
-    });
-
-    scaleSelect.addEventListener('change', () => {
         audio.setScaleType(scaleSelect.value);
+        updateSummary();
+        closeOptions();
+    };
+
+    quantizeSummary.addEventListener('click', handleSummaryClick);
+    quantizeSummary.addEventListener('touchend', handleSummaryClick);
+
+    quantizeOffBtn.addEventListener('click', handleQuantizeOff);
+    quantizeOffBtn.addEventListener('touchend', handleQuantizeOff);
+
+    tonicSelect.addEventListener('change', handleScaleChange);
+    scaleSelect.addEventListener('change', handleScaleChange);
+
+    // Close options when clicking outside
+    document.addEventListener('click', (e) => {
+        const target = e.target as Element;
+        if (!target.closest('.quantize-control')) {
+            closeOptions();
+        }
     });
 
-    // Initialize UI to match engine state (quantization enabled by default)
-    quantizeBtn.classList.toggle('active', audio.isQuantized);
-    scaleOptions.classList.toggle('visible', audio.isQuantized);
+    // Initialize summary
+    updateSummary();
 
     // Range button handler
     const rangeBtn = document.getElementById('rangeBtn')!;
@@ -354,13 +430,29 @@ export function initLoopControls(audio: AudioEngine) {
     const clearBtn = document.getElementById('loopClearBtn') as HTMLButtonElement;
     const statusEl = document.getElementById('loopStatus')!;
 
-    // Toggle loop controls visibility
-    const handleLoopToggle = (e: Event) => {
-        e.stopPropagation();
-        e.preventDefault();
-        const isExpanded = loopControls.classList.toggle('expanded');
-        loopToggleBtn.classList.toggle('active', isExpanded);
+    // Helper to prevent double-firing on touch devices
+    const createTouchSafeHandler = (handler: () => void) => {
+        let justTouched = false;
+        return (e: Event) => {
+            e.stopPropagation();
+            e.preventDefault();
+            if (e.type === 'touchend') {
+                justTouched = true;
+                setTimeout(() => { justTouched = false; }, 100);
+            } else if (e.type === 'click' && justTouched) {
+                return;
+            }
+            handler();
+        };
     };
+
+    // Toggle loop controls visibility
+    const handleLoopToggle = createTouchSafeHandler(() => {
+        const isExpanded = loopControls.classList.toggle('expanded');
+        // Also set inline style since it has higher specificity than CSS classes
+        loopControls.style.display = isExpanded ? 'flex' : 'none';
+        loopToggleBtn.classList.toggle('active', isExpanded);
+    });
 
     loopToggleBtn.addEventListener('click', handleLoopToggle);
     loopToggleBtn.addEventListener('touchend', handleLoopToggle);
@@ -392,10 +484,7 @@ export function initLoopControls(audio: AudioEngine) {
     };
 
     // Record button handler
-    const handleRecord = (e: Event) => {
-        e.stopPropagation();
-        e.preventDefault();
-
+    const handleRecord = createTouchSafeHandler(() => {
         if (loopRecorder!.isRecording) {
             loopRecorder!.stopRecording();
         } else {
@@ -405,30 +494,25 @@ export function initLoopControls(audio: AudioEngine) {
             }
             loopRecorder!.startRecording();
         }
-    };
+    });
     recordBtn.addEventListener('click', handleRecord);
     recordBtn.addEventListener('touchend', handleRecord);
 
     // Play button handler
-    const handlePlay = (e: Event) => {
-        e.stopPropagation();
-        e.preventDefault();
-
+    const handlePlay = createTouchSafeHandler(() => {
         if (loopRecorder!.isPlaying) {
             loopRecorder!.stopPlayback();
         } else {
             loopRecorder!.startPlayback();
         }
-    };
+    });
     playBtn.addEventListener('click', handlePlay);
     playBtn.addEventListener('touchend', handlePlay);
 
     // Clear button handler
-    const handleClear = (e: Event) => {
-        e.stopPropagation();
-        e.preventDefault();
+    const handleClear = createTouchSafeHandler(() => {
         loopRecorder!.clearLoop();
-    };
+    });
     clearBtn.addEventListener('click', handleClear);
     clearBtn.addEventListener('touchend', handleClear);
 }
@@ -442,9 +526,19 @@ export function initEffectsControls(audio: AudioEngine) {
         reverbBtn.classList.toggle('active', level !== 'off');
     };
 
+    // Touch-safe handler
+    let justTouchedReverb = false;
     const handleReverb = (e: Event) => {
         e.stopPropagation();
         e.preventDefault();
+
+        if (e.type === 'touchend') {
+            justTouchedReverb = true;
+            setTimeout(() => { justTouchedReverb = false; }, 100);
+        } else if (e.type === 'click' && justTouchedReverb) {
+            return;
+        }
+
         audio.cycleReverb();
         updateReverbButton();
     };
@@ -454,98 +548,104 @@ export function initEffectsControls(audio: AudioEngine) {
 
     // Initialize button state
     updateReverbButton();
-
-    // Update button state when mode changes (oneheart enables reverb by default)
-    const modeSelect = document.getElementById('modeSelect');
-    if (modeSelect) {
-        modeSelect.addEventListener('change', () => {
-            setTimeout(updateReverbButton, 100);
-        });
-    }
 }
 
 export function initTextureControls(audio: AudioEngine) {
-    const noiseBtn = document.getElementById('noiseBtn')!;
-    const tapeBtn = document.getElementById('tapeBtn')!;
+    const noiseSummary = document.getElementById('noiseSummary')!;
+    const noiseOptions = document.getElementById('noiseOptions')!;
+    const noiseTypeBtns = noiseOptions.querySelectorAll('.noise-type-btn');
     const volumeSlider = document.getElementById('volumeSlider') as HTMLInputElement;
     const textureVolumeSlider = document.getElementById('textureVolumeSlider') as HTMLInputElement;
-    const textureControls = document.getElementById('textureControls')!;
 
     // Noise type display names
     const noiseTypeNames: Record<string, string> = {
+        off: 'Ambience',
         waves: 'Waves',
         rain: 'Rain',
         wind: 'Wind',
         fire: 'Fire'
     };
 
-    // Update button text to show current noise type
-    const updateNoiseButtonText = () => {
+    // Update summary button and active states
+    const updateNoiseUI = () => {
         const type = audio.getNoiseType();
         const isActive = audio.noiseEnabled;
-        noiseBtn.textContent = noiseTypeNames[type] || type;
-        noiseBtn.classList.toggle('active', isActive);
+
+        // Update summary text
+        noiseSummary.textContent = isActive ? noiseTypeNames[type] : 'Ambience';
+        noiseSummary.classList.toggle('active', isActive);
+
+        // Update type button active states
+        noiseTypeBtns.forEach(btn => {
+            const btnType = (btn as HTMLElement).dataset.type;
+            const isCurrentType = isActive ? btnType === type : btnType === 'off';
+            btn.classList.toggle('active', isCurrentType);
+        });
     };
 
-    // Show texture controls for focus, relaxation, and wavetable modes
-    const updateVisibility = () => {
-        const showTextures = audio.mode === 'focus' || audio.mode === 'relaxation' || audio.mode === 'wavetable';
-        textureControls.style.display = showTextures ? 'flex' : 'none';
-        // Elevate scale controls when secondary bar is visible
-        updateScaleControlsPosition(audio);
-    };
-
-    // Noise toggle (short press) and cycle type (long press)
-    let pressTimer: ReturnType<typeof setTimeout> | null = null;
-    let isLongPress = false;
-
-    const handleNoiseStart = (e: Event) => {
+    // Toggle options panel (with touch-safe handling)
+    let justTouchedNoise = false;
+    const toggleOptions = (e: Event) => {
         e.stopPropagation();
         e.preventDefault();
-        isLongPress = false;
-        pressTimer = setTimeout(() => {
-            isLongPress = true;
-            // Long press: cycle noise type
-            audio.cycleNoiseType();
-            updateNoiseButtonText();
-        }, 500);
+
+        if (e.type === 'touchend') {
+            justTouchedNoise = true;
+            setTimeout(() => { justTouchedNoise = false; }, 100);
+        } else if (e.type === 'click' && justTouchedNoise) {
+            return;
+        }
+
+        noiseOptions.classList.toggle('expanded');
     };
 
-    const handleNoiseEnd = (e: Event) => {
+    // Close options panel
+    const closeOptions = () => {
+        noiseOptions.classList.remove('expanded');
+    };
+
+    // Handle noise type selection (with touch-safe handling)
+    let justTouchedNoiseType = false;
+    const handleTypeSelect = (e: Event) => {
         e.stopPropagation();
         e.preventDefault();
-        if (pressTimer) {
-            clearTimeout(pressTimer);
-            pressTimer = null;
+
+        if (e.type === 'touchend') {
+            justTouchedNoiseType = true;
+            setTimeout(() => { justTouchedNoiseType = false; }, 100);
+        } else if (e.type === 'click' && justTouchedNoiseType) {
+            return;
         }
-        if (!isLongPress) {
-            // Short press: toggle on/off
-            audio.toggleNoise();
-            updateNoiseButtonText();
+
+        const btn = e.currentTarget as HTMLElement;
+        const type = btn.dataset.type;
+
+        if (type === 'off') {
+            audio.setNoiseEnabled(false);
+        } else if (type) {
+            audio.setNoiseType(type as NoiseType);
+            audio.setNoiseEnabled(true);
         }
+
+        updateNoiseUI();
+        closeOptions();
     };
 
-    noiseBtn.addEventListener('mousedown', handleNoiseStart);
-    noiseBtn.addEventListener('mouseup', handleNoiseEnd);
-    noiseBtn.addEventListener('mouseleave', () => {
-        if (pressTimer) {
-            clearTimeout(pressTimer);
-            pressTimer = null;
+    noiseSummary.addEventListener('click', toggleOptions);
+    noiseSummary.addEventListener('touchend', toggleOptions);
+
+    noiseTypeBtns.forEach(btn => {
+        btn.addEventListener('click', handleTypeSelect);
+        btn.addEventListener('touchend', handleTypeSelect);
+    });
+
+    // Close options when clicking outside
+    document.addEventListener('click', (e) => {
+        const target = e.target as Element;
+        if (!target.closest('.noise-control')) {
+            closeOptions();
         }
     });
-    noiseBtn.addEventListener('touchstart', handleNoiseStart);
-    noiseBtn.addEventListener('touchend', handleNoiseEnd);
-
-    // Tape hiss toggle
-    const handleTape = (e: Event) => {
-        e.stopPropagation();
-        e.preventDefault();
-        const enabled = audio.toggleTapeHiss();
-        tapeBtn.classList.toggle('active', enabled);
-    };
-
-    tapeBtn.addEventListener('click', handleTape);
-    tapeBtn.addEventListener('touchend', handleTape);
 
     // Texture volume slider
     textureVolumeSlider.addEventListener('input', (e) => {
@@ -571,26 +671,9 @@ export function initTextureControls(audio: AudioEngine) {
     volumeSlider.addEventListener('touchmove', (e) => e.stopPropagation());
     volumeSlider.addEventListener('touchend', (e) => e.stopPropagation());
 
-    // Sync UI state with audio engine state
-    const syncUIState = () => {
-        updateVisibility();
-        updateNoiseButtonText();
-        tapeBtn.classList.toggle('active', audio.tapeHissEnabled);
-
-        // Sync slider values with engine state
-        textureVolumeSlider.value = String(Math.round(audio.getTextureVolume() * 100));
-    };
-
-    // Initialize visibility and button state
-    syncUIState();
-
-    // Update visibility and state when mode changes
-    const modeSelect = document.getElementById('modeSelect');
-    if (modeSelect) {
-        modeSelect.addEventListener('change', () => {
-            setTimeout(syncUIState, 100);
-        });
-    }
+    // Initialize UI
+    updateNoiseUI();
+    textureVolumeSlider.value = String(Math.round(audio.getTextureVolume() * 100));
 }
 
 export function initBeatsControls(audio: AudioEngine) {

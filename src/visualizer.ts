@@ -315,73 +315,93 @@ export function removeCursor(touchId: TouchId = 'mouse') {
 }
 
 function drawWaveformZones(audio: AudioEngine) {
-    const playableHeight = height - CONTROL_BAR_HEIGHT;
+    // Canvas is already sized to exclude control bar (via CSS calc)
+    // so we use the full canvas height as playable area
+    const playableHeight = height;
 
-    // Draw gradient background (morphing from sine to square)
-    const gradient = ctx.createLinearGradient(0, 0, 0, playableHeight);
-    gradient.addColorStop(0, 'rgba(255, 100, 100, 0.04)');    // Square (top/high Y)
-    gradient.addColorStop(0.33, 'rgba(255, 200, 100, 0.04)'); // Saw
-    gradient.addColorStop(0.67, 'rgba(100, 255, 200, 0.04)'); // Triangle
-    gradient.addColorStop(1, 'rgba(100, 150, 255, 0.04)');    // Sine (bottom/low Y)
+    // Draw gradient background (morphing from sine to square, left to right)
+    const gradient = ctx.createLinearGradient(0, 0, width, 0);
+    gradient.addColorStop(0, 'rgba(100, 150, 255, 0.04)');    // Sine (left/low X)
+    gradient.addColorStop(0.33, 'rgba(100, 255, 200, 0.04)'); // Triangle
+    gradient.addColorStop(0.67, 'rgba(255, 200, 100, 0.04)'); // Saw
+    gradient.addColorStop(1, 'rgba(255, 100, 100, 0.04)');    // Square (right/high X)
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, playableHeight);
 
-    // Draw octave lines (vertical)
-    const rangeInfo = audio.getRangeInfo();
-    const octaves = Math.ceil(rangeInfo.octaves);
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+    // Vertical lines: evenly spaced grid (8 divisions)
+    const numVerticalLines = 8;
     ctx.lineWidth = 1;
-    ctx.setLineDash([2, 4]);
+    ctx.setLineDash([]);
 
-    for (let i = 1; i < octaves; i++) {
-        const x = (i / rangeInfo.octaves) * width;
+    for (let i = 1; i < numVerticalLines; i++) {
+        const x = (i / numVerticalLines) * width;
+        // Brighter lines at waveform zone boundaries (1/3, 2/3)
+        const isZoneBoundary = Math.abs(i - numVerticalLines / 3) < 0.5 ||
+                               Math.abs(i - (numVerticalLines * 2) / 3) < 0.5;
+        ctx.strokeStyle = isZoneBoundary
+            ? 'rgba(0, 255, 204, 0.1)'   // Zone boundaries slightly brighter
+            : 'rgba(0, 255, 204, 0.04)'; // Regular grid lines darker
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, playableHeight);
         ctx.stroke();
-
-        // Octave label at bottom
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-        ctx.font = '10px Courier New';
-        ctx.textAlign = 'center';
-        const octaveNum = Math.floor(Math.log2(rangeInfo.baseFreq / 16.35)) + i + 1; // Calculate actual octave number
-        ctx.fillText(`${octaveNum}`, x, playableHeight - 5);
     }
-    ctx.setLineDash([]);
 
-    // Waveform markers at morph positions (not zones, just reference points)
+    // Horizontal lines: pitch/octave grid
+    const rangeInfo = audio.getRangeInfo();
+    const octaves = rangeInfo.octaves;
+
+    // If quantized, draw lines for each scale tone (darker)
+    if (audio.isQuantized) {
+        const scalePattern = audio.getScalePattern();
+        const notesPerOctave = scalePattern.length;
+        const totalNotes = Math.ceil(octaves * notesPerOctave);
+
+        ctx.strokeStyle = 'rgba(0, 255, 204, 0.04)';
+        ctx.lineWidth = 1;
+
+        for (let i = 1; i < totalNotes; i++) {
+            const y = playableHeight - (i / totalNotes) * playableHeight;
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(width, y);
+            ctx.stroke();
+        }
+    }
+
+    // Octave lines (brighter)
+    ctx.strokeStyle = 'rgba(0, 255, 204, 0.1)';
+    ctx.lineWidth = 1;
+    const numOctaves = Math.ceil(octaves);
+
+    for (let i = 1; i < numOctaves; i++) {
+        const y = playableHeight - (i / octaves) * playableHeight;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+
+        // Octave label on left edge
+        ctx.fillStyle = 'rgba(0, 255, 204, 0.2)';
+        ctx.font = '10px Courier New';
+        ctx.textAlign = 'left';
+        const octaveNum = Math.floor(Math.log2(rangeInfo.baseFreq / 16.35)) + i + 1;
+        ctx.fillText(`${octaveNum}`, 5, y + 12);
+    }
+
+    // Waveform markers at morph positions (horizontal, at bottom)
     const waveforms = [
-        { name: 'SQUARE', y: 0, drawWave: drawSquareWave, color: 'rgba(255, 100, 100, 0.3)' },
-        { name: 'SAW', y: playableHeight / 3, drawWave: drawSawWave, color: 'rgba(255, 200, 100, 0.3)' },
-        { name: 'TRI', y: (playableHeight * 2) / 3, drawWave: drawTriWave, color: 'rgba(100, 255, 200, 0.3)' },
-        { name: 'SINE', y: playableHeight, drawWave: drawSineWave, color: 'rgba(100, 150, 255, 0.3)' }
+        { name: 'SINE', x: 0, drawWave: drawSineWave, color: 'rgba(100, 150, 255, 0.3)' },
+        { name: 'TRI', x: width / 3, drawWave: drawTriWave, color: 'rgba(100, 255, 200, 0.3)' },
+        { name: 'SAW', x: (width * 2) / 3, drawWave: drawSawWave, color: 'rgba(255, 200, 100, 0.3)' },
+        { name: 'SQUARE', x: width, drawWave: drawSquareWave, color: 'rgba(255, 100, 100, 0.3)' }
     ];
 
     waveforms.forEach((wf) => {
-        // Draw waveform icon on the right edge
-        const yPos = Math.min(playableHeight - 20, Math.max(20, wf.y));
-        wf.drawWave(width - 60, yPos, 40, 15);
-
-        // Small label
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
-        ctx.font = '9px Courier New';
-        ctx.textAlign = 'right';
-        ctx.fillText(wf.name, width - 15, yPos + 4);
+        // Draw waveform icon at the bottom edge (no text labels)
+        const xPos = Math.min(width - 30, Math.max(30, wf.x));
+        wf.drawWave(xPos, playableHeight - 18, 40, 15);
     });
-
-    // Draw morph arrows between waveforms
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([3, 3]);
-    for (let i = 0; i < waveforms.length - 1; i++) {
-        const y1 = waveforms[i].y;
-        const y2 = waveforms[i + 1].y;
-        ctx.beginPath();
-        ctx.moveTo(width - 40, Math.max(25, y1 + 15));
-        ctx.lineTo(width - 40, Math.min(playableHeight - 25, y2 - 15));
-        ctx.stroke();
-    }
-    ctx.setLineDash([]);
 }
 
 function drawSineWave(cx: number, cy: number, w: number, h: number) {
@@ -931,7 +951,10 @@ export function animate(audio: AudioEngine) {
         case 'relaxation': drawOneheartOverlay(); break;
     }
 
-    drawGrid();
+    // Skip generic grid for wavetable (has its own grid in drawWaveformZones)
+    if (audio.mode !== 'wavetable') {
+        drawGrid();
+    }
     drawRipples();
     drawCursor();
 
