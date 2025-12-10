@@ -1,8 +1,8 @@
 /**
  * Wavetable Synthesis Mode
  *
- * X-axis: Pitch (quantized to scale if enabled)
- * Y-axis: Smooth waveform morphing (sine → triangle → saw → square)
+ * X-axis: Waveform morphing (sine → triangle → saw → square)
+ * Y-axis: Pitch (quantized to scale if enabled) - higher = higher pitch
  */
 
 import type { TouchId, WavetableVoice } from '../types';
@@ -102,7 +102,7 @@ function getLoudnessCompensation(y: number): number {
 
 export class WavetableMode extends BaseSynthMode {
     readonly name = 'wavetable';
-    readonly hudLabels: [string, string] = ['X: Pitch | β: Cutoff', 'Y: Waveform | γ: Q'];
+    readonly hudLabels: [string, string] = ['X: Waveform | β: Cutoff', 'Y: Pitch | γ: Q'];
 
     private voices = new Map<TouchId, WavetableVoice>();
 
@@ -150,8 +150,11 @@ export class WavetableMode extends BaseSynthMode {
     }
 
     update(x: number, y: number, touchId: TouchId, duration: number, engine: EngineContext): void {
-        const { ctx, filter } = engine;
+        const { ctx, filter, envelope } = engine;
         const now = ctx.currentTime;
+
+        // Compute note frequency from Y position (higher Y = higher pitch)
+        const note = this.quantizeToScale(y, engine.rangeOctaves, engine.rangeBaseFreq, engine);
 
         // Create voice if it doesn't exist
         if (!this.voices.has(touchId)) {
@@ -167,11 +170,27 @@ export class WavetableMode extends BaseSynthMode {
             const tremoloDepth = ctx.createGain();  // Controls how much tremolo
             const tremoloGain = ctx.createGain();   // Applies tremolo to output
 
-            // Start with sine wave
-            const initialWave = this.getMorphedWave(ctx, y);
+            // Set waveform from X position (sine on left, square on right)
+            const initialWave = this.getMorphedWave(ctx, x);
             osc.setPeriodicWave(initialWave);
-            osc.frequency.value = 220;
-            gain.gain.value = 0;
+            osc.frequency.value = note.freq;  // Set correct frequency immediately
+
+            // Apply loudness compensation based on waveform (X position)
+            const compensation = getLoudnessCompensation(x);
+            const compensatedGain = VOICE_GAIN * compensation;
+
+            // ADSR envelope: start at 0, attack to peak, decay to sustain
+            gain.gain.setValueAtTime(0, now);
+
+            // Attack phase: ramp to full gain
+            const attackEnd = now + envelope.attack;
+            gain.gain.linearRampToValueAtTime(compensatedGain, attackEnd);
+
+            // Decay phase: ramp to sustain level (if decay > 0)
+            if (envelope.decay > 0) {
+                const sustainGain = compensatedGain * envelope.sustain;
+                gain.gain.linearRampToValueAtTime(sustainGain, attackEnd + envelope.decay);
+            }
 
             // Vibrato LFO (pitch modulation)
             lfo.frequency.value = 2;
@@ -196,30 +215,61 @@ export class WavetableMode extends BaseSynthMode {
             lfo.start();
             tremoloLfo.start();
 
-            this.voices.set(touchId, { osc, gain, lfo, lfoGain, tremoloLfo, tremoloGain, tremoloDepth });
+            this.voices.set(touchId, {
+                osc, gain, lfo, lfoGain, tremoloLfo, tremoloGain, tremoloDepth,
+                startTime: now,
+                targetGain: compensatedGain,
+                adsrPhase: 'attack'
+            });
 
-            // Register voice for HUD display
+            // Register voice for HUD display with actual note info
             engine.registerVoice({
                 touchId,
-                noteName: '--',
-                octave: 0,
-                freq: 220,
-                waveform: 'sine'
+                noteName: note.noteName,
+                octave: note.octave,
+                freq: note.freq,
+                waveform: this.getWaveformName(x)
             });
         }
 
         const voice = this.voices.get(touchId)!;
-        const note = this.quantizeToScale(x, engine.rangeOctaves, engine.rangeBaseFreq, engine);
 
+        // Smoothly update frequency (for finger movement)
         voice.osc.frequency.setTargetAtTime(note.freq, now, 0.005);
 
-        // Apply loudness compensation to equalize perceived volume across waveforms
-        const compensation = getLoudnessCompensation(y);
+        // Apply loudness compensation based on waveform (X position)
+        const compensation = getLoudnessCompensation(x);
         const compensatedGain = VOICE_GAIN * compensation;
-        voice.gain.gain.setTargetAtTime(compensatedGain, now, 0.005);
 
-        // Morph waveform based on Y position
-        const morphedWave = this.getMorphedWave(ctx, y);
+        // Track ADSR phase transitions
+        const elapsed = now - voice.startTime;
+        const envelopeDuration = envelope.attack + envelope.decay;
+        // Add 50ms buffer to let scheduled automation complete cleanly
+        const envelopeSettled = elapsed >= envelopeDuration + 0.05;
+
+        if (elapsed < envelope.attack) {
+            voice.adsrPhase = 'attack';
+        } else if (elapsed < envelopeDuration) {
+            voice.adsrPhase = 'decay';
+        } else {
+            voice.adsrPhase = 'sustain';
+        }
+
+        // Only adjust gain after envelope has fully settled (attack + decay + buffer)
+        // This prevents interference with the initial scheduled ramps
+        if (envelopeSettled) {
+            const sustainGain = compensatedGain * envelope.sustain;
+            // Only update if target changed significantly (avoid constant automation)
+            if (Math.abs(sustainGain - voice.targetGain * envelope.sustain) > 0.01) {
+                voice.gain.gain.setTargetAtTime(sustainGain, now, 0.05);
+            }
+        }
+
+        // Update stored target gain
+        voice.targetGain = compensatedGain;
+
+        // Morph waveform based on X position (sine on left, square on right)
+        const morphedWave = this.getMorphedWave(ctx, x);
         voice.osc.setPeriodicWave(morphedWave);
 
         // Get shake intensity from orientation params
@@ -227,8 +277,8 @@ export class WavetableMode extends BaseSynthMode {
         const isShaking = shake > SHAKE_ACCELERATION_THRESHOLD;
         const shakeIntensity = isShaking ? Math.min(1, (shake - SHAKE_ACCELERATION_THRESHOLD) / 10) : 0;
 
-        // Vibrato depth increases with Y and shake
-        const baseVibratoDepth = 30 + y * 40; // 30-70 cents base
+        // Vibrato depth increases with X (waveform position) and shake
+        const baseVibratoDepth = 30 + x * 40; // 30-70 cents base
         const shakeVibratoBoost = shakeIntensity * 80; // Up to 80 cents extra on shake
         const modDepth = baseVibratoDepth * 0.5 + shakeVibratoBoost;
 
@@ -248,7 +298,7 @@ export class WavetableMode extends BaseSynthMode {
         voice.tremoloLfo.frequency.setTargetAtTime(tremoloRate, now, 0.05);
 
         // Update voice registry for HUD
-        const waveformName = this.getWaveformName(y);
+        const waveformName = this.getWaveformName(x);
         engine.updateVoice(touchId, {
             noteName: note.noteName,
             octave: note.octave,
@@ -257,13 +307,21 @@ export class WavetableMode extends BaseSynthMode {
         });
     }
 
-    stop(touchId: TouchId, releaseTime: number, engine: EngineContext): void {
+    stop(touchId: TouchId, _releaseTime: number, engine: EngineContext): void {
         if (!this.voices.has(touchId)) return;
 
         const voice = this.voices.get(touchId)!;
         const now = engine.ctx.currentTime;
-        voice.gain.gain.setTargetAtTime(0, now, releaseTime);
-        voice.tremoloDepth.gain.setTargetAtTime(0, now, releaseTime); // Fade out tremolo
+
+        // Use envelope's release time (ignore the passed releaseTime for ADSR presets)
+        const release = engine.envelope.release;
+
+        // Cancel any scheduled envelope automation and release from current value
+        voice.gain.gain.cancelScheduledValues(now);
+        voice.gain.gain.setValueAtTime(voice.gain.gain.value, now);
+        voice.gain.gain.linearRampToValueAtTime(0, now + release);
+
+        voice.tremoloDepth.gain.setTargetAtTime(0, now, release * 0.5); // Fade out tremolo
 
         // Unregister voice from HUD immediately
         engine.unregisterVoice(touchId);
@@ -277,7 +335,7 @@ export class WavetableMode extends BaseSynthMode {
             this.cleanupGain(voice.tremoloGain);
             this.cleanupGain(voice.tremoloDepth);
             this.voices.delete(touchId);
-        }, releaseTime * 1000 + VOICE_CLEANUP_BUFFER_MS);
+        }, release * 1000 + VOICE_CLEANUP_BUFFER_MS);
     }
 
     cleanup(): void {

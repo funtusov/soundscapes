@@ -3,7 +3,7 @@
  */
 
 import type { TouchId, NoteInfo, VoiceDisplayInfo } from '../types';
-import { MAX_VOICES, VOICE_GAIN, VOICE_CLEANUP_BUFFER_MS, NOTE_NAMES, SCALE_PATTERNS } from '../constants';
+import { MAX_VOICES, VOICE_GAIN, VOICE_CLEANUP_BUFFER_MS, NOTE_NAMES, SCALE_PATTERNS, type ADSRPreset } from '../constants';
 
 /**
  * Shared engine context passed to modes
@@ -21,6 +21,8 @@ export interface EngineContext {
     // Frequency range
     rangeOctaves: number;
     rangeBaseFreq: number;
+    // ADSR envelope preset
+    envelope: ADSRPreset;
     // Orientation parameters (for continuous modes)
     orientationParams: {
         pan: number;

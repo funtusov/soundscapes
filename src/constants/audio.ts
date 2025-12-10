@@ -180,6 +180,49 @@ export const LOOP_TOUCH_ID_OFFSET = 10000;
 /** Touch ID offset per loop iteration */
 export const LOOP_ITERATION_OFFSET = 1000;
 
+// ============ ADSR ENVELOPE PRESETS ============
+
+/** ADSR envelope preset type */
+export interface ADSRPreset {
+    name: string;
+    attack: number;   // Attack time in seconds
+    decay: number;    // Decay time in seconds
+    sustain: number;  // Sustain level (0-1)
+    release: number;  // Release time in seconds
+}
+
+/** Available ADSR envelope presets */
+export const ADSR_PRESETS: ADSRPreset[] = [
+    {
+        name: 'Pad',
+        attack: 0.005,   // Instant attack
+        decay: 0.0,      // No decay
+        sustain: 1.0,    // Full sustain
+        release: 0.3,    // Medium release
+    },
+    {
+        name: 'Swell',
+        attack: 0.6,     // Slow fade-in
+        decay: 0.0,      // No decay
+        sustain: 1.0,    // Full sustain
+        release: 1.2,    // Long dreamy release
+    },
+    {
+        name: 'Pluck',
+        attack: 0.001,   // Instant attack
+        decay: 0.4,      // Decay over 400ms
+        sustain: 0.35,   // Settles to 35% - noticeable drop
+        release: 0.15,   // Quick release
+    },
+    {
+        name: 'Soft',
+        attack: 0.15,    // Gentle 150ms rise
+        decay: 0.2,      // Slight bloom-and-settle
+        sustain: 0.8,    // High sustain
+        release: 0.5,    // Gentle release
+    },
+];
+
 // ============ SYNTHESIS MODE TYPES ============
 
 /** Available synthesis modes */

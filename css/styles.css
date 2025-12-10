@@ -228,6 +228,42 @@ canvas {
     color: #66ccff;
 }
 
+.envelope-btn {
+    padding: 6px 14px;
+    border: 1px solid rgba(180, 100, 255, 0.5);
+    background: transparent;
+    color: rgba(180, 100, 255, 0.7);
+    font-size: 0.75rem;
+    font-family: 'Courier New', monospace;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.envelope-btn:hover {
+    border-color: #b466ff;
+    color: #b466ff;
+}
+
+.envelope-edit-btn {
+    padding: 6px 10px;
+    border: 1px solid rgba(180, 100, 255, 0.3);
+    background: transparent;
+    color: rgba(180, 100, 255, 0.5);
+    font-size: 0.8rem;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.envelope-edit-btn:hover {
+    border-color: #b466ff;
+    color: #b466ff;
+    background: rgba(180, 100, 255, 0.1);
+}
+
 .scale-options {
     display: none;
     gap: 10px;
@@ -583,4 +619,103 @@ canvas {
     font-family: 'Courier New', monospace;
     min-width: 28px;
     text-align: right;
+}
+
+/* ============ ADSR Envelope Modal ============ */
+
+.envelope-modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
+}
+
+.envelope-modal.visible {
+    display: flex;
+}
+
+.envelope-modal-content {
+    background: linear-gradient(135deg, rgba(20, 25, 35, 0.98), rgba(30, 35, 50, 0.98));
+    border: 1px solid rgba(180, 100, 255, 0.4);
+    border-radius: 12px;
+    padding: 16px;
+    max-width: 360px;
+    width: 90%;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 60px rgba(180, 100, 255, 0.15);
+}
+
+.envelope-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.envelope-modal-title {
+    color: rgba(180, 100, 255, 0.9);
+    font-size: 0.9rem;
+    font-family: 'Courier New', monospace;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
+.envelope-modal-close {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: rgba(255, 255, 255, 0.7);
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    font-size: 1.2rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.envelope-modal-close:hover {
+    border-color: rgba(255, 100, 100, 0.6);
+    color: rgba(255, 100, 100, 0.9);
+}
+
+#envelopeCanvas {
+    width: 100%;
+    height: auto;
+    background: rgba(0, 0, 0, 0.4);
+    border-radius: 6px;
+    border: 1px solid rgba(180, 100, 255, 0.2);
+    touch-action: none;
+    cursor: crosshair;
+}
+
+.envelope-values {
+    display: flex;
+    justify-content: space-around;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(180, 100, 255, 0.2);
+}
+
+.env-value {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.env-label {
+    color: rgba(180, 100, 255, 0.7);
+    font-size: 0.7rem;
+    font-family: 'Courier New', monospace;
+    font-weight: bold;
+}
+
+.env-value span:last-child {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 0.75rem;
+    font-family: 'Courier New', monospace;
 }

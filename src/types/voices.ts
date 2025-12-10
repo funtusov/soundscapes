@@ -14,6 +14,10 @@ export interface WavetableVoice {
     tremoloLfo: OscillatorNode;    // Tremolo (amplitude modulation)
     tremoloGain: GainNode;
     tremoloDepth: GainNode;        // Controls tremolo amount
+    // ADSR envelope tracking
+    startTime: number;             // When voice started (for attack/decay)
+    targetGain: number;            // Target gain after attack (includes compensation)
+    adsrPhase: 'attack' | 'decay' | 'sustain'; // Current envelope phase
 }
 
 // ============ DRONE MODE ============

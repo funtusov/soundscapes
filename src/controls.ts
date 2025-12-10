@@ -264,6 +264,18 @@ export function initScaleControls(audio: AudioEngine) {
 
     rangeBtn.addEventListener('click', handleRangeToggle);
     rangeBtn.addEventListener('touchend', handleRangeToggle);
+
+    // Envelope button handler
+    const envelopeBtn = document.getElementById('envelopeBtn')!;
+    const handleEnvelopeToggle = (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const envelope = audio.cycleEnvelope();
+        envelopeBtn.textContent = envelope.name;
+    };
+
+    envelopeBtn.addEventListener('click', handleEnvelopeToggle);
+    envelopeBtn.addEventListener('touchend', handleEnvelopeToggle);
 }
 
 // Extend window for iOS device orientation/motion permissions

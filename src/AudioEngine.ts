@@ -36,6 +36,9 @@ import {
     DEFAULT_TEXTURE_VOLUME,
     TAPE_HISS_SETTINGS,
     type NoiseType,
+    // ADSR envelope imports
+    ADSR_PRESETS,
+    type ADSRPreset,
 } from './constants';
 
 // Import mode system
@@ -101,6 +104,8 @@ export class AudioEngine {
     // Voice display registry for HUD
     private voiceRegistry = new Map<TouchId, VoiceDisplayInfo>();
 
+    // ADSR envelope preset
+    envelopeIndex = 0; // Default to "Pad"
 
     // Reverb effect chain
     private convolver: ConvolverNode | null = null;
@@ -224,6 +229,7 @@ export class AudioEngine {
             scaleType: this.scaleType,
             rangeOctaves: this.rangePresets[this.rangeIndex].octaves,
             rangeBaseFreq: this.rangePresets[this.rangeIndex].baseFreq,
+            envelope: ADSR_PRESETS[this.envelopeIndex],
             orientationParams: this.orientationParams,
             updateHUD: (freq, harm) => this.updateHUD(freq, harm),
             registerVoice: (info) => this.registerVoice(info),
@@ -898,6 +904,27 @@ export class AudioEngine {
     getRangeInfo(): { octaves: number; baseFreq: number; name: string } {
         const preset = this.rangePresets[this.rangeIndex];
         return { octaves: preset.octaves, baseFreq: preset.baseFreq, name: preset.name };
+    }
+
+    /** Cycle through ADSR envelope presets */
+    cycleEnvelope(): ADSRPreset {
+        this.envelopeIndex = (this.envelopeIndex + 1) % ADSR_PRESETS.length;
+        return ADSR_PRESETS[this.envelopeIndex];
+    }
+
+    /** Get current ADSR envelope preset */
+    getEnvelope(): ADSRPreset {
+        return ADSR_PRESETS[this.envelopeIndex];
+    }
+
+    /** Set envelope by name */
+    setEnvelopeByName(name: string): boolean {
+        const index = ADSR_PRESETS.findIndex(p => p.name === name);
+        if (index >= 0) {
+            this.envelopeIndex = index;
+            return true;
+        }
+        return false;
     }
 
     resume(): void {
