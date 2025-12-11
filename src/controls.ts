@@ -319,6 +319,11 @@ export function initScaleControls(audio: AudioEngine) {
     tonicSelect.addEventListener('change', handleScaleChange);
     scaleSelect.addEventListener('change', handleScaleChange);
 
+    // Prevent clicks on options panel from propagating to canvas
+    quantizeOptions.addEventListener('click', (e) => e.stopPropagation());
+    quantizeOptions.addEventListener('touchstart', (e) => e.stopPropagation());
+    quantizeOptions.addEventListener('touchend', (e) => e.stopPropagation());
+
     // Close options when clicking outside
     document.addEventListener('click', (e) => {
         const target = e.target as Element;
@@ -330,17 +335,88 @@ export function initScaleControls(audio: AudioEngine) {
     // Initialize summary
     updateSummary();
 
-    // Range button handler
-    const rangeBtn = document.getElementById('rangeBtn')!;
-    const handleRangeToggle = (e: Event) => {
-        e.stopPropagation();
-        e.preventDefault();
-        const range = audio.cycleRange();
-        rangeBtn.textContent = range.name;
+    // Range control (octaves + location)
+    const rangeSummary = document.getElementById('rangeSummary')!;
+    const rangeOptions = document.getElementById('rangeOptions')!;
+    const rangeOctBtns = rangeOptions.querySelectorAll('.range-oct-btn');
+    const rangeLocBtns = rangeOptions.querySelectorAll('.range-loc-btn');
+
+    const locationNames: Record<string, string> = {
+        bass: 'Bass',
+        mid: 'Mid',
+        high: 'High'
     };
 
-    rangeBtn.addEventListener('click', handleRangeToggle);
-    rangeBtn.addEventListener('touchend', handleRangeToggle);
+    const updateRangeSummary = () => {
+        const range = audio.getRange();
+        rangeSummary.textContent = `${range.octaves} ${locationNames[range.location]}`;
+    };
+
+    const closeRangeOptions = () => {
+        rangeOptions.classList.remove('expanded');
+    };
+
+    // Summary button toggles options panel
+    let justTouchedRange = false;
+    const handleRangeSummaryClick = (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
+        if (e.type === 'touchend') {
+            justTouchedRange = true;
+            setTimeout(() => { justTouchedRange = false; }, 100);
+        } else if (e.type === 'click' && justTouchedRange) {
+            return;
+        }
+        rangeOptions.classList.toggle('expanded');
+    };
+
+    rangeSummary.addEventListener('click', handleRangeSummaryClick);
+    rangeSummary.addEventListener('touchend', handleRangeSummaryClick);
+
+    // Octave buttons
+    rangeOctBtns.forEach(btn => {
+        const handleOctClick = (e: Event) => {
+            e.stopPropagation();
+            e.preventDefault();
+            const octaves = parseInt((btn as HTMLElement).dataset.oct || '3', 10);
+            audio.setRangeOctaves(octaves);
+            rangeOctBtns.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            updateRangeSummary();
+        };
+        btn.addEventListener('click', handleOctClick);
+        btn.addEventListener('touchend', handleOctClick);
+    });
+
+    // Location buttons
+    rangeLocBtns.forEach(btn => {
+        const handleLocClick = (e: Event) => {
+            e.stopPropagation();
+            e.preventDefault();
+            const location = (btn as HTMLElement).dataset.loc as 'bass' | 'mid' | 'high';
+            audio.setRangeLocation(location);
+            rangeLocBtns.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            updateRangeSummary();
+        };
+        btn.addEventListener('click', handleLocClick);
+        btn.addEventListener('touchend', handleLocClick);
+    });
+
+    // Prevent clicks on options panel from propagating to canvas
+    rangeOptions.addEventListener('click', (e) => e.stopPropagation());
+    rangeOptions.addEventListener('touchstart', (e) => e.stopPropagation());
+    rangeOptions.addEventListener('touchend', (e) => e.stopPropagation());
+
+    // Close range options when clicking elsewhere
+    document.addEventListener('click', (e) => {
+        if (!rangeOptions.contains(e.target as Node) && !rangeSummary.contains(e.target as Node)) {
+            closeRangeOptions();
+        }
+    });
+
+    // Initialize summary
+    updateRangeSummary();
 
     // Envelope button handler
     const envelopeBtn = document.getElementById('envelopeBtn')!;
@@ -531,20 +607,51 @@ export function initLoopControls(audio: AudioEngine) {
 }
 
 export function initEffectsControls(audio: AudioEngine) {
-    const reverbBtn = document.getElementById('reverbBtn')!;
+    const reverbSummary = document.getElementById('reverbSummary')!;
+    const reverbOptions = document.getElementById('reverbOptions')!;
+    const reverbOffBtn = document.getElementById('reverbOffBtn')!;
+    const reverbSizeSlider = document.getElementById('reverbSizeSlider') as HTMLInputElement;
+    const reverbMixSlider = document.getElementById('reverbMixSlider') as HTMLInputElement;
 
-    const updateReverbButton = () => {
-        const level = audio.reverbLevel;
-        reverbBtn.textContent = level === 'off' ? 'Reverb' : 'Reverb';
-        reverbBtn.classList.toggle('active', level !== 'off');
+    // Track reverb state
+    let reverbEnabled = false;
+    let reverbSize = 60; // 0-100
+    let reverbMix = 50;  // 0-100
+
+    const updateReverbSummary = () => {
+        if (!reverbEnabled) {
+            reverbSummary.textContent = 'Reverb';
+            reverbSummary.classList.remove('active');
+            reverbOffBtn.classList.add('active');
+        } else {
+            reverbSummary.textContent = `Reverb ${reverbMix}%`;
+            reverbSummary.classList.add('active');
+            reverbOffBtn.classList.remove('active');
+        }
     };
 
-    // Touch-safe handler
+    const applyReverb = () => {
+        if (!reverbEnabled) {
+            audio.setReverbLevel('off');
+        } else {
+            // Size affects reverb intensity, mix affects wet/dry balance
+            const sizeMultiplier = 0.5 + (reverbSize / 100) * 0.5; // 0.5-1.0
+            const wet = (reverbMix / 100) * sizeMultiplier;
+            const dry = 1 - wet * 0.4; // Keep some dry signal
+            audio.setReverbLevel('on');
+            audio.setReverbParams(0, wet, dry);
+        }
+    };
+
+    const closeReverbOptions = () => {
+        reverbOptions.classList.remove('expanded');
+    };
+
+    // Summary button toggles options panel or turns on reverb
     let justTouchedReverb = false;
-    const handleReverb = (e: Event) => {
+    const handleReverbSummaryClick = (e: Event) => {
         e.stopPropagation();
         e.preventDefault();
-
         if (e.type === 'touchend') {
             justTouchedReverb = true;
             setTimeout(() => { justTouchedReverb = false; }, 100);
@@ -552,15 +659,85 @@ export function initEffectsControls(audio: AudioEngine) {
             return;
         }
 
-        audio.cycleReverb();
-        updateReverbButton();
+        if (!reverbEnabled) {
+            // Turn on reverb
+            reverbEnabled = true;
+            applyReverb();
+            updateReverbSummary();
+        }
+        // Toggle options panel
+        reverbOptions.classList.toggle('expanded');
     };
 
-    reverbBtn.addEventListener('click', handleReverb);
-    reverbBtn.addEventListener('touchend', handleReverb);
+    reverbSummary.addEventListener('click', handleReverbSummaryClick);
+    reverbSummary.addEventListener('touchend', handleReverbSummaryClick);
 
-    // Initialize button state
-    updateReverbButton();
+    // Off button
+    const handleOffClick = (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
+        reverbEnabled = false;
+        applyReverb();
+        updateReverbSummary();
+        closeReverbOptions();
+    };
+    reverbOffBtn.addEventListener('click', handleOffClick);
+    reverbOffBtn.addEventListener('touchend', handleOffClick);
+
+    // Size slider (affects decay character)
+    reverbSizeSlider.addEventListener('input', () => {
+        reverbSize = parseInt(reverbSizeSlider.value, 10);
+        if (!reverbEnabled) {
+            reverbEnabled = true;
+        }
+        applyReverb();
+        updateReverbSummary();
+    });
+
+    // Mix slider
+    reverbMixSlider.addEventListener('input', () => {
+        reverbMix = parseInt(reverbMixSlider.value, 10);
+        if (!reverbEnabled) {
+            reverbEnabled = true;
+        }
+        applyReverb();
+        updateReverbSummary();
+    });
+
+    // Prevent clicks on options panel from propagating to canvas
+    reverbOptions.addEventListener('click', (e) => e.stopPropagation());
+    reverbOptions.addEventListener('touchstart', (e) => e.stopPropagation());
+    reverbOptions.addEventListener('touchend', (e) => e.stopPropagation());
+
+    // Close options when clicking elsewhere
+    document.addEventListener('click', (e) => {
+        if (!reverbOptions.contains(e.target as Node) && !reverbSummary.contains(e.target as Node)) {
+            closeReverbOptions();
+        }
+    });
+
+    // Initialize
+    updateReverbSummary();
+
+    // Compass pan button handler
+    const compassPanBtn = document.getElementById('compassPanBtn')!;
+
+    let justTouchedPan = false;
+    const handlePanToggle = (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
+        if (e.type === 'touchend') {
+            justTouchedPan = true;
+            setTimeout(() => { justTouchedPan = false; }, 100);
+        } else if (e.type === 'click' && justTouchedPan) {
+            return;
+        }
+        const enabled = audio.toggleCompassPan();
+        compassPanBtn.classList.toggle('active', enabled);
+    };
+
+    compassPanBtn.addEventListener('click', handlePanToggle);
+    compassPanBtn.addEventListener('touchend', handlePanToggle);
 }
 
 export function initTextureControls(audio: AudioEngine) {
@@ -651,6 +828,11 @@ export function initTextureControls(audio: AudioEngine) {
         btn.addEventListener('click', handleTypeSelect);
         btn.addEventListener('touchend', handleTypeSelect);
     });
+
+    // Prevent clicks on options panel from propagating to canvas
+    noiseOptions.addEventListener('click', (e) => e.stopPropagation());
+    noiseOptions.addEventListener('touchstart', (e) => e.stopPropagation());
+    noiseOptions.addEventListener('touchend', (e) => e.stopPropagation());
 
     // Close options when clicking outside
     document.addEventListener('click', (e) => {

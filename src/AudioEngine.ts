@@ -74,13 +74,14 @@ export class AudioEngine {
     tonic = 7; // G
     scaleType = 'pent_min';
 
-    // Frequency range presets (octaves, baseFreq)
-    private rangePresets = [
-        { name: 'Tight', octaves: 1.5, baseFreq: 98 },    // G2-D4, precise control
-        { name: 'Medium', octaves: 3, baseFreq: 98 },     // G2-G5, balanced
-        { name: 'Wide', octaves: 5, baseFreq: 49 },       // G1-G6, full range
-    ] as const;
-    rangeIndex = 1; // Default to Medium
+    // Frequency range: octaves + location
+    private locationBaseFreqs = {
+        bass: 55,   // A1 - sub-bass/bass territory
+        mid: 110,   // A2 - mid range, good default
+        high: 220   // A3 - treble territory
+    } as const;
+    rangeOctaves = 3;
+    rangeLocation: 'bass' | 'mid' | 'high' = 'mid';
     scale = [0, 3, 5, 7, 10, 12, 15, 17, 19, 22, 24];
     silentAudio: HTMLAudioElement;
 
@@ -101,6 +102,10 @@ export class AudioEngine {
     // Arpeggio state
     arpEnabled = false;
     arpRate = 4; // Notes per second
+
+    // Compass pan state
+    compassPanEnabled = false;
+    private compassPanAnchor: number | null = null;
 
     // Reverb effect chain
     private convolver: ConvolverNode | null = null;
@@ -215,8 +220,8 @@ export class AudioEngine {
             isQuantized: this.isQuantized,
             tonic: this.tonic,
             scaleType: this.scaleType,
-            rangeOctaves: this.rangePresets[this.rangeIndex].octaves,
-            rangeBaseFreq: this.rangePresets[this.rangeIndex].baseFreq,
+            rangeOctaves: this.rangeOctaves,
+            rangeBaseFreq: this.locationBaseFreqs[this.rangeLocation],
             envelope: ADSR_PRESETS[this.envelopeIndex],
             arpEnabled: this.arpEnabled,
             arpRate: this.arpRate,
@@ -838,21 +843,33 @@ export class AudioEngine {
         return SCALE_PATTERNS[this.scaleType] || SCALE_PATTERNS.pent_min;
     }
 
-    /** Cycle through frequency range presets */
-    cycleRange(): { name: string; octaves: number; baseFreq: number } {
-        this.rangeIndex = (this.rangeIndex + 1) % this.rangePresets.length;
-        return this.rangePresets[this.rangeIndex];
+    /** Set range octaves */
+    setRangeOctaves(octaves: number): void {
+        this.rangeOctaves = octaves;
     }
 
-    /** Get current range preset */
-    getRange(): { name: string; octaves: number; baseFreq: number } {
-        return this.rangePresets[this.rangeIndex];
+    /** Set range location */
+    setRangeLocation(location: 'bass' | 'mid' | 'high'): void {
+        this.rangeLocation = location;
+    }
+
+    /** Get current range info */
+    getRange(): { octaves: number; location: string; baseFreq: number } {
+        return {
+            octaves: this.rangeOctaves,
+            location: this.rangeLocation,
+            baseFreq: this.locationBaseFreqs[this.rangeLocation]
+        };
     }
 
     /** Get range info for visualizer (octave count and positions) */
     getRangeInfo(): { octaves: number; baseFreq: number; name: string } {
-        const preset = this.rangePresets[this.rangeIndex];
-        return { octaves: preset.octaves, baseFreq: preset.baseFreq, name: preset.name };
+        const locationNames = { bass: 'Bass', mid: 'Mid', high: 'High' };
+        return {
+            octaves: this.rangeOctaves,
+            baseFreq: this.locationBaseFreqs[this.rangeLocation],
+            name: `${this.rangeOctaves} ${locationNames[this.rangeLocation]}`
+        };
     }
 
     /** Cycle through ADSR envelope presets */
@@ -890,6 +907,30 @@ export class AudioEngine {
     /** Set arpeggio rate (notes per second) */
     setArpRate(rate: number): void {
         this.arpRate = Math.max(2, Math.min(16, rate));
+    }
+
+    /** Toggle compass-controlled panning */
+    toggleCompassPan(): boolean {
+        this.compassPanEnabled = !this.compassPanEnabled;
+        if (this.compassPanEnabled) {
+            // Set the anchor to current compass heading
+            this.compassPanAnchor = this.orientationParams.compass;
+        } else {
+            // Reset pan to center
+            if (this.panner && this.ctx) {
+                this.panner.pan.setTargetAtTime(0, this.ctx.currentTime, 0.1);
+            }
+            this.orientationParams.pan = 0;
+            this.compassPanAnchor = null;
+        }
+        return this.compassPanEnabled;
+    }
+
+    /** Re-anchor compass pan to current heading */
+    reanchorCompassPan(): void {
+        if (this.compassPanEnabled) {
+            this.compassPanAnchor = this.orientationParams.compass;
+        }
     }
 
     resume(): void {
@@ -978,6 +1019,21 @@ export class AudioEngine {
 
         const compassHeading = alpha ?? 0;
         this.orientationParams.compass = compassHeading;
+
+        // Apply compass-controlled panning
+        if (this.compassPanEnabled && this.panner && this.compassPanAnchor !== null) {
+            // Calculate difference from anchor (accounting for wrap-around at 360)
+            let diff = compassHeading - this.compassPanAnchor;
+            // Normalize to -180 to 180
+            while (diff > 180) diff -= 360;
+            while (diff < -180) diff += 360;
+            // Use sine for natural spatial audio:
+            // 0° (facing source) = center, 90° = full right,
+            // 180° (behind) = center, 270° = full left
+            const panValue = Math.sin(diff * Math.PI / 180);
+            this.panner.pan.setTargetAtTime(panValue, now, 0.05);
+            this.orientationParams.pan = panValue;
+        }
 
         const tiltEl = document.getElementById('val-tilt');
         if (tiltEl) {

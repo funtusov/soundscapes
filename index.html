@@ -29,7 +29,25 @@
 
     <!-- Scale Controls -->
     <div class="scale-controls" id="scaleControls" style="display: none;">
-        <button class="range-btn" id="rangeBtn">Medium</button>
+        <!-- Range: collapsible control with octaves + location -->
+        <div class="range-control" id="rangeControl">
+            <button class="range-summary" id="rangeSummary">3 Mid</button>
+            <div class="range-options" id="rangeOptions">
+                <div class="range-row">
+                    <span class="range-label">Oct</span>
+                    <button class="range-oct-btn" data-oct="1">1</button>
+                    <button class="range-oct-btn" data-oct="2">2</button>
+                    <button class="range-oct-btn active" data-oct="3">3</button>
+                    <button class="range-oct-btn" data-oct="5">5</button>
+                </div>
+                <div class="range-row">
+                    <span class="range-label">Loc</span>
+                    <button class="range-loc-btn" data-loc="bass">Bass</button>
+                    <button class="range-loc-btn active" data-loc="mid">Mid</button>
+                    <button class="range-loc-btn" data-loc="high">High</button>
+                </div>
+            </div>
+        </div>
 
         <!-- Quantize: collapsed summary or expanded options -->
         <div class="quantize-control" id="quantizeControl">
@@ -100,7 +118,25 @@
 
     <!-- Main bottom bar -->
     <div class="mode-selector" id="modeSelector" style="display: none;">
-        <button class="effect-btn" id="reverbBtn">Reverb</button>
+        <!-- Reverb: collapsible control -->
+        <div class="reverb-control" id="reverbControl">
+            <button class="reverb-summary" id="reverbSummary">Reverb</button>
+            <div class="reverb-options" id="reverbOptions">
+                <button class="reverb-off-btn" id="reverbOffBtn">Off</button>
+                <div class="reverb-sliders">
+                    <div class="reverb-slider-row">
+                        <span class="reverb-slider-label">Size</span>
+                        <input type="range" id="reverbSizeSlider" min="0" max="100" value="60" class="reverb-slider">
+                    </div>
+                    <div class="reverb-slider-row">
+                        <span class="reverb-slider-label">Mix</span>
+                        <input type="range" id="reverbMixSlider" min="0" max="100" value="50" class="reverb-slider">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <button class="compass-pan-btn" id="compassPanBtn" title="Compass Pan">Pan</button>
 
         <!-- Noise: collapsible control -->
         <div class="noise-control" id="noiseControl">
