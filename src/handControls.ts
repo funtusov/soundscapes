@@ -6,7 +6,7 @@
  * - Two-hand "theremin-ish" mapping:
  *   - Left hand: resonance (height) + filter cutoff (palm orientation)
  *   - Right hand: proximity-gated play + reverb (pinch)
- *     - Within ~40cm: continuous control (waveform/pitch)
+ *     - Within ~30cm: continuous control (waveform/pitch)
  *     - Crossing into range: "pluck" (note onset)
  */
 
@@ -38,17 +38,25 @@ const PINCH_RATIO_REVERB_MAX = 0.9;
 // Right-hand proximity gating (estimated from hand size in image).
 // The estimate is approximate (depends on camera FOV + hand size).
 const RIGHT_HAND_RANGE_ENTER_M = 0.30;
-const RIGHT_HAND_RANGE_EXIT_M = 0.34;
+const RIGHT_HAND_RANGE_EXIT_M = 0.31;
 const ASSUMED_CAMERA_FOV_DEG = 60;
 const RIGHT_HAND_REF_LEN_M = 0.07; // approx wrist → middle MCP
 
 // Entry velocity → attack shaping (m/s → seconds).
-const ENTRY_VELOCITY_MIN_MPS = 0.02;
-const ENTRY_VELOCITY_MAX_MPS = 0.45;
-const ENTRY_VELOCITY_CURVE = 0.5;
-const ENTRY_ATTACK_SLOW_S = 0.12;
-const ENTRY_ATTACK_FAST_S = 0.008;
-const ENTRY_VELOCITY_EMA_ALPHA = 0.25;
+const DIST_EMA_ALPHA = 0.4;
+const ENTRY_VELOCITY_MIN_MPS = 0.01;
+const ENTRY_VELOCITY_MAX_MPS = 0.25;
+const ENTRY_VELOCITY_CURVE = 0.25;
+const ENTRY_ATTACK_SLOW_S = 0.04;
+const ENTRY_ATTACK_FAST_S = 0.0015;
+const ENTRY_VELOCITY_EMA_ALPHA = 0.3;
+
+// Exit velocity → release shaping (m/s → seconds).
+const EXIT_VELOCITY_MIN_MPS = 0.01;
+const EXIT_VELOCITY_MAX_MPS = 0.25;
+const EXIT_VELOCITY_CURVE = 0.25;
+const EXIT_RELEASE_SLOW_S = 0.12;
+const EXIT_RELEASE_FAST_S = 0.02;
 
 type Status = 'off' | 'loading' | 'show' | 'filter' | 'sound' | 'both' | 'error';
 
@@ -169,6 +177,7 @@ export function initHandControls(audio: AudioEngine): void {
     let soundInRange = false;
     let soundStartMs = 0;
     let lostSoundFrames = 0;
+    let smoothDistM: number | null = null;
     let soundPrevDistM: number | null = null;
     let soundPrevDistMs: number | null = null;
     let smoothApproachVelMps: number | null = null;
@@ -208,10 +217,13 @@ export function initHandControls(audio: AudioEngine): void {
         return el;
     };
 
-    const stopHandVoice = () => {
+    const stopHandVoice = (releaseSeconds?: number) => {
         if (!soundActive) return;
+        if (releaseSeconds !== undefined) {
+            audio.setHandReleaseSeconds(releaseSeconds);
+        }
         const duration = (Date.now() - soundStartMs) / 1000;
-        audio.stop(HAND_TOUCH_ID, duration);
+        audio.stop(HAND_TOUCH_ID, duration, { applyReleaseEnvelope: false });
         soundActive = false;
         soundInRange = false;
         removeCursor(HAND_TOUCH_ID);
@@ -244,6 +256,7 @@ export function initHandControls(audio: AudioEngine): void {
         smoothReverb = null;
         reverbActive = false;
         soundInRange = false;
+        smoothDistM = null;
         soundPrevDistM = null;
         soundPrevDistMs = null;
         smoothApproachVelMps = null;
@@ -338,7 +351,7 @@ export function initHandControls(audio: AudioEngine): void {
             }
         }
 
-        // Right hand: within ~40cm => continuous sound; crossing into range => onset ("pluck").
+        // Right hand: within ~30cm => continuous sound; crossing into range => onset ("pluck").
         // Also: pinch openness controls reverb.
         if (soundHand) {
             const thumbTip = soundHand.landmarks[4];
@@ -356,18 +369,23 @@ export function initHandControls(audio: AudioEngine): void {
                 const pitchY = clamp(1 - smoothSoundY, 0, 1);
 
                 soundDistM = video ? estimateDistanceMeters(video, wrist2d, middleMcp) : null;
-                const dist = soundDistM ?? RIGHT_HAND_RANGE_ENTER_M;
+                if (soundDistM !== null) {
+                    smoothDistM = ema(smoothDistM, soundDistM, DIST_EMA_ALPHA);
+                }
+                const gateDist = smoothDistM ?? soundDistM;
 
-                const shouldBeInRange = soundInRange
-                    ? dist <= RIGHT_HAND_RANGE_EXIT_M
-                    : dist <= RIGHT_HAND_RANGE_ENTER_M;
+                const shouldBeInRange = gateDist === null
+                    ? soundInRange
+                    : (soundInRange ? gateDist <= RIGHT_HAND_RANGE_EXIT_M : gateDist <= RIGHT_HAND_RANGE_ENTER_M);
 
                 // Estimate approach speed (m/s) from distance delta; positive means moving closer.
+                let approachVelNowMps = smoothApproachVelMps ?? 0;
                 if (soundDistM !== null) {
                     if (soundPrevDistM !== null && soundPrevDistMs !== null) {
                         const dt = (nowMs - soundPrevDistMs) / 1000;
                         if (dt > 0.001) {
                             const approachVel = (soundPrevDistM - soundDistM) / dt;
+                            approachVelNowMps = approachVel;
                             smoothApproachVelMps = ema(smoothApproachVelMps, approachVel, ENTRY_VELOCITY_EMA_ALPHA);
                         }
                     }
@@ -407,7 +425,7 @@ export function initHandControls(audio: AudioEngine): void {
                     if (!soundInRange) {
                         soundInRange = true;
                         // Velocity-dependent attack shaping for the onset.
-                        const v = Math.max(0, smoothApproachVelMps ?? 0);
+                        const v = Math.max(0, Math.max(smoothApproachVelMps ?? 0, approachVelNowMps));
                         const tLinear = clamp(
                             (v - ENTRY_VELOCITY_MIN_MPS) / (ENTRY_VELOCITY_MAX_MPS - ENTRY_VELOCITY_MIN_MPS),
                             0,
@@ -434,10 +452,18 @@ export function initHandControls(audio: AudioEngine): void {
                 } else {
                     // Out of range => silence.
                     if (soundInRange) {
+                        const vOut = Math.max(0, Math.max(-(smoothApproachVelMps ?? 0), -approachVelNowMps));
+                        const tLinear = clamp(
+                            (vOut - EXIT_VELOCITY_MIN_MPS) / (EXIT_VELOCITY_MAX_MPS - EXIT_VELOCITY_MIN_MPS),
+                            0,
+                            1
+                        );
+                        const t = Math.pow(tLinear, EXIT_VELOCITY_CURVE);
+                        const release = EXIT_RELEASE_SLOW_S * (1 - t) + EXIT_RELEASE_FAST_S * t;
                         soundInRange = false;
-                    }
-                    if (soundActive) {
-                        stopHandVoice();
+                        if (soundActive) {
+                            stopHandVoice(release);
+                        }
                     }
                 }
 

@@ -126,6 +126,7 @@ export class AudioEngine {
 
     // Hand (webcam) onset shaping
     private handAttackSeconds: number | null = null;
+    private handReleaseSeconds: number | null = null;
 
     constructor() {
         // Silent audio for iOS unlock
@@ -227,8 +228,12 @@ export class AudioEngine {
     private getEngineContext(touchId?: TouchId): EngineContext {
         const isHand = typeof touchId === 'string' && touchId.startsWith('hand');
         const baseEnvelope = ADSR_PRESETS[this.envelopeIndex];
-        const envelope = isHand && this.handAttackSeconds !== null
-            ? { ...baseEnvelope, attack: clamp(this.handAttackSeconds, 0.001, 0.25) }
+        const envelope = isHand
+            ? {
+                ...baseEnvelope,
+                attack: clamp(this.handAttackSeconds ?? baseEnvelope.attack, 0.001, 0.25),
+                release: clamp(this.handReleaseSeconds ?? baseEnvelope.release, 0.005, 2.0),
+            }
             : baseEnvelope;
         return {
             ctx: this.ctx!,
@@ -257,6 +262,11 @@ export class AudioEngine {
     /** Hand (webcam): set attack time (seconds) for the next onset. */
     setHandAttackSeconds(seconds: number): void {
         this.handAttackSeconds = seconds;
+    }
+
+    /** Hand (webcam): set release time (seconds) for the next note-off. */
+    setHandReleaseSeconds(seconds: number): void {
+        this.handReleaseSeconds = seconds;
     }
 
     initMode(): void {
