@@ -222,13 +222,14 @@ export class AudioEngine {
      * Create the engine context that mode classes need
      */
     private getEngineContext(touchId?: TouchId): EngineContext {
+        const isHand = typeof touchId === 'string' && touchId.startsWith('hand');
         return {
             ctx: this.ctx!,
             filter: this.filter!,
             masterGain: this.masterGain!,
             currentTime: this.ctx!.currentTime,
             // Hand (webcam) control is intentionally continuous for a "theremin-ish" feel.
-            isQuantized: touchId === 'hand' ? false : this.isQuantized,
+            isQuantized: isHand ? false : this.isQuantized,
             tonic: this.tonic,
             scaleType: this.scaleType,
             rangeOctaves: this.rangeOctaves,
@@ -1015,7 +1016,11 @@ export class AudioEngine {
         this.isPlaying = true;
     }
 
-    stop(touchId: TouchId = 0, duration = 0): void {
+    stop(
+        touchId: TouchId = 0,
+        duration = 0,
+        options?: { applyReleaseEnvelope?: boolean }
+    ): void {
         if (!this.ctx) return;
         const now = this.ctx.currentTime;
 
@@ -1024,7 +1029,9 @@ export class AudioEngine {
         const releaseTime = profile.releaseTime;
 
         if (this.currentMode) {
-            this.applyReleaseEnvelope(duration);
+            if (options?.applyReleaseEnvelope !== false) {
+                this.applyReleaseEnvelope(duration);
+            }
             this.currentMode.stop(touchId, releaseTime, this.getEngineContext(touchId));
 
             if (this.currentMode.getVoiceCount() === 0 && this.masterGain) {
