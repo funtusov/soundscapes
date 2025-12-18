@@ -5,9 +5,11 @@
  * - Uses MediaPipe Tasks Vision HandLandmarker (loaded lazily on enable).
  * - Two-hand "theremin-ish" mapping:
  *   - Left hand: resonance (height) + filter cutoff (palm orientation)
- *   - Right hand: proximity-gated play + reverb (pinch)
- *     - Within ~30cm: continuous control (waveform/pitch)
- *     - Crossing into range: "pluck" (note onset)
+ *   - Right hand: dual-zone control + reverb (pinch)
+ *     - Pad zone (within 30cm): continuous pad/swell control
+ *     - Pluck zone (35-50cm): fast jabs trigger single plucks
+ *       - Speed determines attack sharpness
+ *       - Only one pluck per jab gesture (re-arms when velocity drops)
  */
 
 import type { AudioEngine } from './AudioEngine';
@@ -37,19 +39,54 @@ const PINCH_RATIO_REVERB_MAX = 0.9;
 
 // Right-hand proximity gating (estimated from hand size in image).
 // The estimate is approximate (depends on camera FOV + hand size).
-const RIGHT_HAND_RANGE_ENTER_M = 0.30;
-const RIGHT_HAND_RANGE_EXIT_M = 0.31;
-const ASSUMED_CAMERA_FOV_DEG = 60;
 const RIGHT_HAND_REF_LEN_M = 0.07; // approx wrist → middle MCP
 
-// Entry velocity → attack shaping (m/s → seconds).
-const DIST_EMA_ALPHA = 0.4;
-const ENTRY_VELOCITY_MIN_MPS = 0.01;
-const ENTRY_VELOCITY_MAX_MPS = 0.25;
-const ENTRY_VELOCITY_CURVE = 0.25;
-const ENTRY_ATTACK_SLOW_S = 0.04;
-const ENTRY_ATTACK_FAST_S = 0.0015;
-const ENTRY_VELOCITY_EMA_ALPHA = 0.3;
+// Detect mobile for platform-specific tuning.
+const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+// Platform-specific coefficients:
+// - Mobile front cameras have wider FOV (~80°) vs laptops (~60°)
+// - Mobile usage is typically closer, with more hand jitter
+const CAMERA_FOV_DEG = IS_MOBILE ? 80 : 60;
+
+// Zone thresholds (meters):
+// - Pad zone: continuous pad/swell control
+// - Pluck zone: single pluck gestures
+// Mobile zones are closer due to phone being held nearer.
+const PAD_ZONE_ENTER_M = IS_MOBILE ? 0.15 : 0.30;
+const PAD_ZONE_EXIT_M = IS_MOBILE ? 0.17 : 0.31;
+const PLUCK_ZONE_NEAR_M = IS_MOBILE ? 0.20 : 0.35;
+const PLUCK_ZONE_FAR_M = IS_MOBILE ? 0.30 : 0.50;
+
+// X-Y mapping scale: how much of the camera view maps to the full surface.
+// >1.0 means less hand movement covers full range.
+// Desktop: 70% of view (1/0.7 ≈ 1.43), Mobile: 50% of view (2.0).
+const XY_SCALE = IS_MOBILE ? 2.0 : 1.43;
+const XY_CENTER = 0.5;
+
+// Pluck velocity thresholds (m/s) - determines attack sharpness.
+// Mobile needs higher threshold due to hand jitter from holding phone.
+const PLUCK_MIN_VELOCITY_MPS = IS_MOBILE ? 0.35 : 0.25;
+const PLUCK_MAX_VELOCITY_MPS = IS_MOBILE ? 1.5 : 1.2;
+const PLUCK_VELOCITY_CURVE = 0.4;
+const PLUCK_ATTACK_SLOW_S = 0.02;
+const PLUCK_ATTACK_FAST_S = 0.001;
+// Pluck release is short since it's a transient.
+const PLUCK_RELEASE_S = 0.08;
+// Velocity must drop below this to re-arm the pluck.
+// Higher on mobile to prevent accidental re-triggers.
+const PLUCK_REARM_VELOCITY_MPS = IS_MOBILE ? 0.15 : 0.1;
+
+// Entry velocity → attack shaping for pad zone (m/s → seconds).
+// Mobile uses heavier smoothing (lower alpha) to reduce jitter.
+const DIST_EMA_ALPHA = IS_MOBILE ? 0.25 : 0.4;
+const PAD_ENTRY_VELOCITY_MIN_MPS = 0.01;
+const PAD_ENTRY_VELOCITY_MAX_MPS = IS_MOBILE ? 0.35 : 0.25;
+const PAD_ENTRY_VELOCITY_CURVE = 0.25;
+const PAD_ENTRY_ATTACK_SLOW_S = 0.04;
+const PAD_ENTRY_ATTACK_FAST_S = 0.0015;
+// Heavier smoothing on mobile to reduce jitter from holding phone.
+const ENTRY_VELOCITY_EMA_ALPHA = IS_MOBILE ? 0.2 : 0.3;
 
 // Exit velocity → release shaping (m/s → seconds).
 const EXIT_VELOCITY_MIN_MPS = 0.01;
@@ -72,7 +109,7 @@ function estimateDistanceMeters(video: HTMLVideoElement, a: NormalizedLandmark, 
     const px = Math.hypot((a.x - b.x) * w, (a.y - b.y) * h);
     if (px < 2) return null;
 
-    const fovRad = ASSUMED_CAMERA_FOV_DEG * Math.PI / 180;
+    const fovRad = CAMERA_FOV_DEG * Math.PI / 180;
     const focalPx = (w / 2) / Math.tan(fovRad / 2);
 
     return (RIGHT_HAND_REF_LEN_M * focalPx) / px;
@@ -174,13 +211,16 @@ export function initHandControls(audio: AudioEngine): void {
 
     // Tracking state
     let soundActive = false;
-    let soundInRange = false;
+    let soundInRange = false;  // In pad zone (continuous control)
     let soundStartMs = 0;
     let lostSoundFrames = 0;
     let smoothDistM: number | null = null;
     let soundPrevDistM: number | null = null;
     let soundPrevDistMs: number | null = null;
     let smoothApproachVelMps: number | null = null;
+
+    // Pluck zone state (35-50cm range for single plucks).
+    let pluckArmed = true;  // Ready to trigger next pluck
 
     // Smoothed point (0..1 in video coords, origin top-left)
     let smoothSoundX: number | null = null;
@@ -261,6 +301,7 @@ export function initHandControls(audio: AudioEngine): void {
         soundPrevDistMs = null;
         smoothApproachVelMps = null;
         lostSoundFrames = 0;
+        pluckArmed = true;
     };
 
     const startCamera = async () => {
@@ -351,7 +392,9 @@ export function initHandControls(audio: AudioEngine): void {
             }
         }
 
-        // Right hand: within ~30cm => continuous sound; crossing into range => onset ("pluck").
+        // Right hand control zones:
+        // - Pad zone (within 30cm): continuous pad/swell control
+        // - Pluck zone (35-50cm): fast jabs trigger single plucks
         // Also: pinch openness controls reverb.
         if (soundHand) {
             const thumbTip = soundHand.landmarks[4];
@@ -364,9 +407,11 @@ export function initHandControls(audio: AudioEngine): void {
                 smoothSoundX = ema(smoothSoundX, middleMcp.x, POS_EMA_ALPHA);
                 smoothSoundY = ema(smoothSoundY, middleMcp.y, POS_EMA_ALPHA);
 
-                // Mirror X to match typical selfie camera expectation.
-                const waveX = clamp(1 - smoothSoundX, 0, 1);
-                const pitchY = clamp(1 - smoothSoundY, 0, 1);
+                // Mirror X to match selfie camera; apply X-Y scaling for mobile.
+                const scaledX = XY_CENTER + (smoothSoundX - XY_CENTER) * XY_SCALE;
+                const scaledY = XY_CENTER + (smoothSoundY - XY_CENTER) * XY_SCALE;
+                const waveX = clamp(1 - scaledX, 0, 1);
+                const pitchY = clamp(1 - scaledY, 0, 1);
 
                 soundDistM = video ? estimateDistanceMeters(video, wrist2d, middleMcp) : null;
                 if (soundDistM !== null) {
@@ -374,9 +419,11 @@ export function initHandControls(audio: AudioEngine): void {
                 }
                 const gateDist = smoothDistM ?? soundDistM;
 
-                const shouldBeInRange = gateDist === null
+                // Determine which zone the hand is in.
+                const inPadZone = gateDist === null
                     ? soundInRange
-                    : (soundInRange ? gateDist <= RIGHT_HAND_RANGE_EXIT_M : gateDist <= RIGHT_HAND_RANGE_ENTER_M);
+                    : (soundInRange ? gateDist <= PAD_ZONE_EXIT_M : gateDist <= PAD_ZONE_ENTER_M);
+                const inPluckZone = gateDist !== null && gateDist >= PLUCK_ZONE_NEAR_M && gateDist <= PLUCK_ZONE_FAR_M;
 
                 // Estimate approach speed (m/s) from distance delta; positive means moving closer.
                 let approachVelNowMps = smoothApproachVelMps ?? 0;
@@ -420,19 +467,63 @@ export function initHandControls(audio: AudioEngine): void {
                     audio.setReverbParams(0, wet, dry);
                 }
 
-                if (shouldBeInRange) {
-                    // Crossing into range => onset ("pluck").
-                    if (!soundInRange) {
-                        soundInRange = true;
-                        // Velocity-dependent attack shaping for the onset.
-                        const v = Math.max(0, Math.max(smoothApproachVelMps ?? 0, approachVelNowMps));
+                // Re-arm pluck when velocity drops low (hand slows down after a jab).
+                const currentVel = Math.max(0, smoothApproachVelMps ?? 0);
+                if (!pluckArmed && currentVel < PLUCK_REARM_VELOCITY_MPS) {
+                    pluckArmed = true;
+                }
+
+                // Handle pluck zone: fast jabs trigger single plucks.
+                if (inPluckZone && pluckArmed && !soundActive) {
+                    const jabVel = Math.max(0, Math.max(smoothApproachVelMps ?? 0, approachVelNowMps));
+                    if (jabVel >= PLUCK_MIN_VELOCITY_MPS) {
+                        // Trigger a single pluck!
+                        pluckArmed = false;
+
+                        // Velocity-dependent attack shaping (faster jab = sharper attack).
                         const tLinear = clamp(
-                            (v - ENTRY_VELOCITY_MIN_MPS) / (ENTRY_VELOCITY_MAX_MPS - ENTRY_VELOCITY_MIN_MPS),
+                            (jabVel - PLUCK_MIN_VELOCITY_MPS) / (PLUCK_MAX_VELOCITY_MPS - PLUCK_MIN_VELOCITY_MPS),
                             0,
                             1
                         );
-                        const t = Math.pow(tLinear, ENTRY_VELOCITY_CURVE);
-                        const attack = ENTRY_ATTACK_SLOW_S * (1 - t) + ENTRY_ATTACK_FAST_S * t;
+                        const t = Math.pow(tLinear, PLUCK_VELOCITY_CURVE);
+                        const attack = PLUCK_ATTACK_SLOW_S * (1 - t) + PLUCK_ATTACK_FAST_S * t;
+                        audio.setHandAttackSeconds(attack);
+                        audio.setHandReleaseSeconds(PLUCK_RELEASE_S);
+
+                        // Play a short pluck note.
+                        soundActive = true;
+                        soundStartMs = Date.now();
+                        audio.start(HAND_TOUCH_ID);
+                        audio.update(waveX, pitchY, HAND_TOUCH_ID, 0);
+
+                        const { width, height } = getCanvasSize();
+                        addRipple(waveX * width, (1 - pitchY) * height);
+                        setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID);
+
+                        // Schedule a short release after the pluck.
+                        setTimeout(() => {
+                            if (soundActive && !soundInRange) {
+                                stopHandVoice(PLUCK_RELEASE_S);
+                            }
+                        }, 80);
+                    }
+                }
+
+                // Handle pad zone: continuous control.
+                if (inPadZone) {
+                    // Entering pad zone from outside.
+                    if (!soundInRange) {
+                        soundInRange = true;
+                        // Velocity-dependent attack shaping for smooth entry.
+                        const v = Math.max(0, Math.max(smoothApproachVelMps ?? 0, approachVelNowMps));
+                        const tLinear = clamp(
+                            (v - PAD_ENTRY_VELOCITY_MIN_MPS) / (PAD_ENTRY_VELOCITY_MAX_MPS - PAD_ENTRY_VELOCITY_MIN_MPS),
+                            0,
+                            1
+                        );
+                        const t = Math.pow(tLinear, PAD_ENTRY_VELOCITY_CURVE);
+                        const attack = PAD_ENTRY_ATTACK_SLOW_S * (1 - t) + PAD_ENTRY_ATTACK_FAST_S * t;
                         audio.setHandAttackSeconds(attack);
                         const { width, height } = getCanvasSize();
                         addRipple(waveX * width, (1 - pitchY) * height);
@@ -449,21 +540,19 @@ export function initHandControls(audio: AudioEngine): void {
 
                     const { width, height } = getCanvasSize();
                     setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID);
-                } else {
-                    // Out of range => silence.
-                    if (soundInRange) {
-                        const vOut = Math.max(0, Math.max(-(smoothApproachVelMps ?? 0), -approachVelNowMps));
-                        const tLinear = clamp(
-                            (vOut - EXIT_VELOCITY_MIN_MPS) / (EXIT_VELOCITY_MAX_MPS - EXIT_VELOCITY_MIN_MPS),
-                            0,
-                            1
-                        );
-                        const t = Math.pow(tLinear, EXIT_VELOCITY_CURVE);
-                        const release = EXIT_RELEASE_SLOW_S * (1 - t) + EXIT_RELEASE_FAST_S * t;
-                        soundInRange = false;
-                        if (soundActive) {
-                            stopHandVoice(release);
-                        }
+                } else if (!inPadZone && soundInRange) {
+                    // Exiting pad zone.
+                    const vOut = Math.max(0, Math.max(-(smoothApproachVelMps ?? 0), -approachVelNowMps));
+                    const tLinear = clamp(
+                        (vOut - EXIT_VELOCITY_MIN_MPS) / (EXIT_VELOCITY_MAX_MPS - EXIT_VELOCITY_MIN_MPS),
+                        0,
+                        1
+                    );
+                    const t = Math.pow(tLinear, EXIT_VELOCITY_CURVE);
+                    const release = EXIT_RELEASE_SLOW_S * (1 - t) + EXIT_RELEASE_FAST_S * t;
+                    soundInRange = false;
+                    if (soundActive) {
+                        stopHandVoice(release);
                     }
                 }
 
