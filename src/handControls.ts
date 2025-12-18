@@ -6,10 +6,11 @@
  * - Two-hand "theremin-ish" mapping:
  *   - Left hand: resonance (height) + filter cutoff (palm orientation)
  *   - Right hand: dual-zone control + reverb (pinch)
- *     - Pad zone (within 30cm): continuous pad/swell control
- *     - Pluck zone (35-50cm): fast jabs trigger single plucks
+ *     - Pad zone (close): continuous pad/swell control
+ *     - Pluck zone (mid-range): forward-back jab triggers pluck
+ *       - Like plucking a string: forward = displacement, sound on pullback
+ *       - Sustained forward into pad zone = pad, not pluck
  *       - Speed determines attack sharpness
- *       - Only one pluck per jab gesture (re-arms when velocity drops)
  */
 
 import type { AudioEngine } from './AudioEngine';
@@ -20,11 +21,24 @@ import type { HandLandmarker, HandLandmarkerResult, Landmark, NormalizedLandmark
 
 const HAND_TOUCH_ID = 'hand';
 
+// Detect mobile for platform-specific tuning.
+const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
 // Keep these pinned for reproducibility (matches package.json dependency).
 const MEDIAPIPE_WASM_BASE_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm';
 const HAND_LANDMARKER_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
-const LOST_HAND_FRAMES_TO_RELEASE = 6;
+// Fewer frames on mobile since tracking can be spottier.
+const LOST_HAND_FRAMES_TO_RELEASE = IS_MOBILE ? 4 : 6;
+
+// Maximum pluck duration (ms) before auto-release.
+const PLUCK_MAX_DURATION_MS = 120;
+
+// Safety timeout: force release if sound plays this long without being in pad zone.
+const STUCK_SOUND_TIMEOUT_MS = 500;
+
+// Stale update timeout: force release if sound hasn't been updated in this long.
+const STALE_UPDATE_TIMEOUT_MS = 200;
 
 // EMA smoothing for position (0..1). Higher = snappier, lower = steadier.
 const POS_EMA_ALPHA = 0.35;
@@ -41,9 +55,6 @@ const PINCH_RATIO_REVERB_MAX = 0.9;
 // The estimate is approximate (depends on camera FOV + hand size).
 const RIGHT_HAND_REF_LEN_M = 0.07; // approx wrist → middle MCP
 
-// Detect mobile for platform-specific tuning.
-const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
 // Platform-specific coefficients:
 // - Mobile front cameras have wider FOV (~80°) vs laptops (~60°)
 // - Mobile usage is typically closer, with more hand jitter
@@ -54,15 +65,17 @@ const CAMERA_FOV_DEG = IS_MOBILE ? 80 : 60;
 // - Pluck zone: single pluck gestures
 // Mobile zones are closer due to phone being held nearer.
 const PAD_ZONE_ENTER_M = IS_MOBILE ? 0.15 : 0.30;
-const PAD_ZONE_EXIT_M = IS_MOBILE ? 0.17 : 0.31;
-const PLUCK_ZONE_NEAR_M = IS_MOBILE ? 0.20 : 0.35;
-const PLUCK_ZONE_FAR_M = IS_MOBILE ? 0.30 : 0.50;
+const PAD_ZONE_EXIT_M = IS_MOBILE ? 0.17 : 0.32;
+const PLUCK_ZONE_NEAR_M = IS_MOBILE ? 0.20 : 0.30;
+const PLUCK_ZONE_FAR_M = IS_MOBILE ? 0.30 : 0.40;
 
 // X-Y mapping scale: how much of the camera view maps to the full surface.
 // >1.0 means less hand movement covers full range.
 // Desktop: 70% of view (1/0.7 ≈ 1.43), Mobile: 50% of view (2.0).
 const XY_SCALE = IS_MOBILE ? 2.0 : 1.43;
-const XY_CENTER = 0.5;
+const XY_CENTER_X = 0.5;
+// Desktop Y center shifted down so hands don't need to be raised as much.
+const XY_CENTER_Y = IS_MOBILE ? 0.5 : 0.6;
 
 // Pluck velocity thresholds (m/s) - determines attack sharpness.
 // Mobile needs higher threshold due to hand jitter from holding phone.
@@ -76,6 +89,11 @@ const PLUCK_RELEASE_S = 0.08;
 // Velocity must drop below this to re-arm the pluck.
 // Higher on mobile to prevent accidental re-triggers.
 const PLUCK_REARM_VELOCITY_MPS = IS_MOBILE ? 0.15 : 0.1;
+
+// Pluck gesture detection: only trigger on forward-back jab, not sustained forward.
+// If hand continues into pad zone, it's a pad entry, not a pluck.
+const PLUCK_PENDING_TIMEOUT_MS = 150;  // Max time to wait for pullback
+const PLUCK_PULLBACK_VELOCITY_MPS = -0.1;  // Negative = moving away from camera
 
 // Entry velocity → attack shaping for pad zone (m/s → seconds).
 // Mobile uses heavier smoothing (lower alpha) to reduce jitter.
@@ -213,14 +231,21 @@ export function initHandControls(audio: AudioEngine): void {
     let soundActive = false;
     let soundInRange = false;  // In pad zone (continuous control)
     let soundStartMs = 0;
+    let soundLastUpdateMs = 0;  // Last time audio.update was called
     let lostSoundFrames = 0;
     let smoothDistM: number | null = null;
     let soundPrevDistM: number | null = null;
     let soundPrevDistMs: number | null = null;
     let smoothApproachVelMps: number | null = null;
 
-    // Pluck zone state (35-50cm range for single plucks).
+    // Pluck zone state.
     let pluckArmed = true;  // Ready to trigger next pluck
+    let inPluckMode = false;  // Currently playing a pluck (not pad)
+    let pluckPending = false;  // Forward motion detected, waiting for pullback
+    let pluckPendingStartMs = 0;  // When pending started
+    let pluckPendingVelocity = 0;  // Velocity when pluck was armed (for attack shaping)
+    let pluckPendingX = 0;  // Position when pluck was armed
+    let pluckPendingY = 0;
 
     // Smoothed point (0..1 in video coords, origin top-left)
     let smoothSoundX: number | null = null;
@@ -266,6 +291,7 @@ export function initHandControls(audio: AudioEngine): void {
         audio.stop(HAND_TOUCH_ID, duration, { applyReleaseEnvelope: false });
         soundActive = false;
         soundInRange = false;
+        inPluckMode = false;
         removeCursor(HAND_TOUCH_ID);
     };
 
@@ -302,6 +328,10 @@ export function initHandControls(audio: AudioEngine): void {
         smoothApproachVelMps = null;
         lostSoundFrames = 0;
         pluckArmed = true;
+        inPluckMode = false;
+        pluckPending = false;
+        pluckPendingStartMs = 0;
+        soundLastUpdateMs = 0;
     };
 
     const startCamera = async () => {
@@ -407,9 +437,9 @@ export function initHandControls(audio: AudioEngine): void {
                 smoothSoundX = ema(smoothSoundX, middleMcp.x, POS_EMA_ALPHA);
                 smoothSoundY = ema(smoothSoundY, middleMcp.y, POS_EMA_ALPHA);
 
-                // Mirror X to match selfie camera; apply X-Y scaling for mobile.
-                const scaledX = XY_CENTER + (smoothSoundX - XY_CENTER) * XY_SCALE;
-                const scaledY = XY_CENTER + (smoothSoundY - XY_CENTER) * XY_SCALE;
+                // Mirror X to match selfie camera; apply X-Y scaling and offset.
+                const scaledX = XY_CENTER_X + (smoothSoundX - XY_CENTER_X) * XY_SCALE;
+                const scaledY = XY_CENTER_Y + (smoothSoundY - XY_CENTER_Y) * XY_SCALE;
                 const waveX = clamp(1 - scaledX, 0, 1);
                 const pitchY = clamp(1 - scaledY, 0, 1);
 
@@ -473,16 +503,35 @@ export function initHandControls(audio: AudioEngine): void {
                     pluckArmed = true;
                 }
 
-                // Handle pluck zone: fast jabs trigger single plucks.
-                if (inPluckZone && pluckArmed && !soundActive) {
+                // Handle pluck zone: forward-back jab gesture.
+                // Like plucking a string: forward = displacement, sound on pullback/release.
+                const currentVelRaw = smoothApproachVelMps ?? 0;
+
+                if (inPluckZone && pluckArmed && !soundActive && !pluckPending) {
+                    // Forward motion in pluck zone - start pending pluck.
                     const jabVel = Math.max(0, Math.max(smoothApproachVelMps ?? 0, approachVelNowMps));
                     if (jabVel >= PLUCK_MIN_VELOCITY_MPS) {
-                        // Trigger a single pluck!
+                        pluckPending = true;
+                        pluckPendingStartMs = Date.now();
+                        pluckPendingVelocity = jabVel;
+                        pluckPendingX = waveX;
+                        pluckPendingY = pitchY;
+                    }
+                }
+
+                // Check for pullback to confirm pluck.
+                if (pluckPending) {
+                    const pendingAge = Date.now() - pluckPendingStartMs;
+
+                    // Pullback detected (velocity reversed) → trigger pluck!
+                    if (currentVelRaw <= PLUCK_PULLBACK_VELOCITY_MPS) {
+                        pluckPending = false;
                         pluckArmed = false;
+                        inPluckMode = true;
 
                         // Velocity-dependent attack shaping (faster jab = sharper attack).
                         const tLinear = clamp(
-                            (jabVel - PLUCK_MIN_VELOCITY_MPS) / (PLUCK_MAX_VELOCITY_MPS - PLUCK_MIN_VELOCITY_MPS),
+                            (pluckPendingVelocity - PLUCK_MIN_VELOCITY_MPS) / (PLUCK_MAX_VELOCITY_MPS - PLUCK_MIN_VELOCITY_MPS),
                             0,
                             1
                         );
@@ -491,27 +540,40 @@ export function initHandControls(audio: AudioEngine): void {
                         audio.setHandAttackSeconds(attack);
                         audio.setHandReleaseSeconds(PLUCK_RELEASE_S);
 
-                        // Play a short pluck note.
+                        // Play a short pluck note at the position where forward motion was captured.
                         soundActive = true;
                         soundStartMs = Date.now();
+                        soundLastUpdateMs = Date.now();
                         audio.start(HAND_TOUCH_ID);
-                        audio.update(waveX, pitchY, HAND_TOUCH_ID, 0);
+                        audio.update(pluckPendingX, pluckPendingY, HAND_TOUCH_ID, 0);
 
                         const { width, height } = getCanvasSize();
-                        addRipple(waveX * width, (1 - pitchY) * height);
-                        setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID);
+                        addRipple(pluckPendingX * width, (1 - pluckPendingY) * height);
+                        setCursor(pluckPendingX * width, (1 - pluckPendingY) * height, HAND_TOUCH_ID);
+                    }
+                    // Timeout without pullback → cancel pending.
+                    else if (pendingAge >= PLUCK_PENDING_TIMEOUT_MS) {
+                        pluckPending = false;
+                    }
+                    // Entering pad zone cancels pending (it's a sustained forward, not a jab).
+                    // This is handled below in pad zone logic.
+                }
 
-                        // Schedule a short release after the pluck.
-                        setTimeout(() => {
-                            if (soundActive && !soundInRange) {
-                                stopHandVoice(PLUCK_RELEASE_S);
-                            }
-                        }, 80);
+                // Auto-release pluck after max duration.
+                if (inPluckMode && soundActive) {
+                    const pluckDuration = Date.now() - soundStartMs;
+                    if (pluckDuration >= PLUCK_MAX_DURATION_MS) {
+                        stopHandVoice(PLUCK_RELEASE_S);
                     }
                 }
 
                 // Handle pad zone: continuous control.
                 if (inPadZone) {
+                    // Clear pluck mode and cancel pending pluck when entering pad zone.
+                    // (Sustained forward motion = pad, not pluck.)
+                    inPluckMode = false;
+                    pluckPending = false;
+
                     // Entering pad zone from outside.
                     if (!soundInRange) {
                         soundInRange = true;
@@ -537,6 +599,7 @@ export function initHandControls(audio: AudioEngine): void {
 
                     const duration = (Date.now() - soundStartMs) / 1000;
                     audio.update(waveX, pitchY, HAND_TOUCH_ID, duration);
+                    soundLastUpdateMs = Date.now();
 
                     const { width, height } = getCanvasSize();
                     setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID);
@@ -566,6 +629,22 @@ export function initHandControls(audio: AudioEngine): void {
 
         if (lostSoundFrames >= LOST_HAND_FRAMES_TO_RELEASE) {
             stopHandVoice();
+        }
+
+        // Safety: force release if sound is stuck (playing but not in pad zone for too long).
+        if (soundActive && !soundInRange) {
+            const stuckDuration = Date.now() - soundStartMs;
+            if (stuckDuration >= STUCK_SOUND_TIMEOUT_MS) {
+                stopHandVoice(PLUCK_RELEASE_S);
+            }
+        }
+
+        // Safety: force release if sound hasn't been updated recently (stale tracking).
+        if (soundActive && soundLastUpdateMs > 0) {
+            const staleDuration = Date.now() - soundLastUpdateMs;
+            if (staleDuration >= STALE_UPDATE_TIMEOUT_MS) {
+                stopHandVoice(PLUCK_RELEASE_S);
+            }
         }
 
         const distSuffix = soundDistM !== null && isFinite(soundDistM) ? `d=${soundDistM.toFixed(2)}m` : undefined;
