@@ -5,6 +5,7 @@
 import { AudioEngine } from './AudioEngine';
 import { initVisualizer, initMelFilterbank, animate } from './visualizer';
 import { initControls, initModeSelector, initScaleControls, initLoopControls, initEffectsControls, initTextureControls, initRecordControls, initDeviceOrientation, updateScaleControlsPosition } from './controls';
+import { initHandControls } from './handControls';
 
 // Initialize audio engine
 const audio = new AudioEngine();
@@ -47,6 +48,7 @@ function initApp(e?: Event) {
     initTextureControls(audio);
     initRecordControls(audio);
     initControls(audio);
+    initHandControls(audio);
     updateScaleControlsPosition(audio);
 
     // Initialize visualizer

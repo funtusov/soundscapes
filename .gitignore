@@ -1,6 +1,7 @@
 .netlify/
 node_modules/
 dist/
+.DS_Store
 
 # Capacitor native platforms
 ios/

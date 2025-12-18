@@ -92,6 +92,12 @@ export function initControls(audio: AudioEngine) {
     }, { passive: false });
 
     window.addEventListener('touchmove', e => {
+        const target = e.target as Element;
+        if (target.closest('.mode-selector')) return;
+        if (target.closest('.scale-controls')) return;
+        if (target.closest('.loop-controls')) return;
+        if (target.closest('.texture-controls')) return;
+        if (target.closest('.beats-controls')) return;
         e.preventDefault();
         for (const touch of Array.from(e.changedTouches)) {
             handleMove(touch.clientX, touch.clientY, touch.identifier, audio);

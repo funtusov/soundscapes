@@ -102,13 +102,27 @@ canvas {
     right: 0;
     height: 44px;
     display: flex;
-    justify-content: center;
+    justify-content: flex-start;
     align-items: center;
     gap: 8px;
     background: rgba(5, 5, 5, 1);
     border-top: 1px solid rgba(0, 255, 204, 0.2);
     z-index: 15;
     padding: 0 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+}
+
+.mode-selector::-webkit-scrollbar {
+    display: none;
+}
+
+@media (min-width: 520px) {
+    .mode-selector {
+        justify-content: center;
+    }
 }
 
 .mode-label {
@@ -526,6 +540,38 @@ canvas {
     border-color: #ffb464;
     color: #ffb464;
     background: rgba(255, 180, 100, 0.15);
+}
+
+/* Hand control button */
+.hand-btn {
+    padding: 6px 14px;
+    border: 1px solid rgba(0, 255, 204, 0.4);
+    background: transparent;
+    color: rgba(0, 255, 204, 0.7);
+    font-size: 0.75rem;
+    font-family: 'Courier New', monospace;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.hand-btn:hover {
+    border-color: rgba(0, 255, 204, 0.8);
+    color: rgba(0, 255, 204, 0.9);
+}
+
+.hand-btn.active {
+    border-color: #00ffcc;
+    color: #00ffcc;
+    background: rgba(0, 255, 204, 0.15);
+    box-shadow: 0 0 8px rgba(0, 255, 204, 0.3);
+}
+
+.hand-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
 }
 
 /* Collapsible noise control */

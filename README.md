@@ -29,6 +29,17 @@ An interactive audio-visual synthesizer instrument for touch devices. Create evo
 | **β (forward/back)** | Filter cutoff (8000Hz flat → 80Hz tilted forward) |
 | **γ (left/right)** | Filter resonance Q (0.5 flat → 15 tilted) |
 
+### Webcam Hand (Web)
+Enable camera hand control via the **Hand** button (bottom bar).
+
+| Gesture | Effect |
+|--------|--------|
+| **Left hand height (Y)** | Filter resonance (higher → more resonant) |
+| **Left hand palm orientation** | LPF cutoff (palm up → 80Hz, palm horizontal → 8000Hz) |
+| **Right hand X position** | Pitch |
+| **Right hand pinch openness** | Waveform shape |
+| **Show/hide right hand** | Start/stop sound |
+
 ### Shake
 Shake your device to trigger a delay feedback burst effect.
 

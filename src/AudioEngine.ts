@@ -12,6 +12,8 @@ import {
     SHAKE_DURATION_MS,
     FILTER_MIN_FREQ,
     FILTER_MAX_FREQ,
+    FILTER_Q_MIN,
+    FILTER_Q_MAX,
     FILTER_Q_DEFAULT,
     FFT_SIZE,
     ANALYSER_SMOOTHING,
@@ -61,6 +63,7 @@ export type { TouchId };
 export class AudioEngine {
     ctx: AudioContext | null = null;
     masterGain: GainNode | null = null;
+    handGain: GainNode | null = null;
     filter: BiquadFilterNode | null = null;
     panner: StereoPannerNode | null = null;
     delayFeedback: GainNode | null = null;
@@ -139,6 +142,10 @@ export class AudioEngine {
         this.masterGain = this.ctx.createGain();
         this.masterGain.gain.value = 0;
 
+        // Hand (webcam) gain: multiplicative volume control without fighting UI slider/start/stop.
+        this.handGain = this.ctx.createGain();
+        this.handGain.gain.value = 1;
+
         // Analyser
         this.analyser = this.ctx.createAnalyser();
         this.analyser.fftSize = FFT_SIZE;
@@ -173,12 +180,15 @@ export class AudioEngine {
 
         // Dry path: Panner → DryGain → MasterGain
         this.panner.connect(this.reverbDryGain!);
-        this.reverbDryGain!.connect(this.masterGain);
+        this.reverbDryGain!.connect(this.handGain);
 
         // Wet path: Panner → Convolver → WetGain → MasterGain
         this.panner.connect(this.convolver!);
         this.convolver!.connect(this.reverbWetGain!);
-        this.reverbWetGain!.connect(this.masterGain);
+        this.reverbWetGain!.connect(this.handGain);
+
+        // Hand gain → Master gain
+        this.handGain.connect(this.masterGain);
 
         // Master output
         this.masterGain.connect(this.analyser);
@@ -211,13 +221,14 @@ export class AudioEngine {
     /**
      * Create the engine context that mode classes need
      */
-    private getEngineContext(): EngineContext {
+    private getEngineContext(touchId?: TouchId): EngineContext {
         return {
             ctx: this.ctx!,
             filter: this.filter!,
             masterGain: this.masterGain!,
             currentTime: this.ctx!.currentTime,
-            isQuantized: this.isQuantized,
+            // Hand (webcam) control is intentionally continuous for a "theremin-ish" feel.
+            isQuantized: touchId === 'hand' ? false : this.isQuantized,
             tonic: this.tonic,
             scaleType: this.scaleType,
             rangeOctaves: this.rangeOctaves,
@@ -748,6 +759,53 @@ export class AudioEngine {
         this.masterGain.gain.setTargetAtTime(gain, now, 0.1);
     }
 
+    /**
+     * Hand control (webcam): multiplicative volume (0..1).
+     * This stacks with the UI volume slider and touch envelopes.
+     */
+    setHandVolume(level: number): void {
+        if (!this.ctx || !this.handGain) return;
+
+        const gain = clamp(level, 0, 1);
+        const now = this.ctx.currentTime;
+        this.handGain.gain.setTargetAtTime(gain, now, 0.08);
+    }
+
+    /**
+     * Hand control (webcam): set filter cutoff via a normalized control value.
+     * `filterMod=1` => FILTER_MIN_FREQ (80Hz), `filterMod=0` => FILTER_MAX_FREQ (8000Hz).
+     */
+    setHandFilterMod(filterMod: number): void {
+        if (!this.ctx || !this.filter) return;
+
+        const mod = clamp(filterMod, 0, 1);
+        const now = this.ctx.currentTime;
+
+        const cutoff = FILTER_MIN_FREQ * Math.pow(FILTER_MAX_FREQ / FILTER_MIN_FREQ, 1 - mod);
+        this.orientationParams.filterMod = mod;
+        this.currentFilterFreq = cutoff;
+        this.filter.frequency.setTargetAtTime(cutoff, now, 0.1);
+
+        const tiltEl = document.getElementById('val-tilt');
+        if (tiltEl) {
+            tiltEl.innerText = `${Math.round(cutoff)}Hz`;
+        }
+    }
+
+    /**
+     * Hand control (webcam): set filter resonance (Q) via a normalized control value (0..1).
+     * Uses an exponential mapping for musical feel: low values are more precise.
+     */
+    setHandFilterQ(resonance: number): void {
+        if (!this.ctx || !this.filter) return;
+
+        const t = clamp(resonance, 0, 1);
+        const now = this.ctx.currentTime;
+
+        const q = FILTER_Q_MIN * Math.pow(FILTER_Q_MAX / FILTER_Q_MIN, t);
+        this.filter.Q.setTargetAtTime(q, now, 0.1);
+    }
+
     // ============ COMMON METHODS ============
 
     /** @deprecated Use registerVoice/unregisterVoice instead */
@@ -948,7 +1006,7 @@ export class AudioEngine {
 
         // Delegate to mode class
         if (this.currentMode) {
-            this.currentMode.start(touchId, this.getEngineContext());
+            this.currentMode.start(touchId, this.getEngineContext(touchId));
         }
 
         if (this.masterGain) {
@@ -967,7 +1025,7 @@ export class AudioEngine {
 
         if (this.currentMode) {
             this.applyReleaseEnvelope(duration);
-            this.currentMode.stop(touchId, releaseTime, this.getEngineContext());
+            this.currentMode.stop(touchId, releaseTime, this.getEngineContext(touchId));
 
             if (this.currentMode.getVoiceCount() === 0 && this.masterGain) {
                 this.masterGain.gain.setTargetAtTime(0, now, releaseTime);
@@ -983,7 +1041,7 @@ export class AudioEngine {
         const clampedY = clamp(y, 0, 1);
 
         if (this.currentMode) {
-            this.currentMode.update(clampedX, clampedY, touchId, duration, this.getEngineContext());
+            this.currentMode.update(clampedX, clampedY, touchId, duration, this.getEngineContext(touchId));
         }
     }
 
