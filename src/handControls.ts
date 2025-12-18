@@ -37,10 +37,17 @@ const PINCH_RATIO_REVERB_MAX = 0.9;
 
 // Right-hand proximity gating (estimated from hand size in image).
 // The estimate is approximate (depends on camera FOV + hand size).
-const RIGHT_HAND_RANGE_ENTER_M = 0.40;
-const RIGHT_HAND_RANGE_EXIT_M = 0.46;
+const RIGHT_HAND_RANGE_ENTER_M = 0.30;
+const RIGHT_HAND_RANGE_EXIT_M = 0.34;
 const ASSUMED_CAMERA_FOV_DEG = 60;
 const RIGHT_HAND_REF_LEN_M = 0.07; // approx wrist → middle MCP
+
+// Entry velocity → attack shaping (m/s → seconds).
+const ENTRY_VELOCITY_MIN_MPS = 0.05;
+const ENTRY_VELOCITY_MAX_MPS = 1.0;
+const ENTRY_ATTACK_SLOW_S = 0.12;
+const ENTRY_ATTACK_FAST_S = 0.008;
+const ENTRY_VELOCITY_EMA_ALPHA = 0.25;
 
 type Status = 'off' | 'loading' | 'show' | 'filter' | 'sound' | 'both' | 'error';
 
@@ -161,6 +168,9 @@ export function initHandControls(audio: AudioEngine): void {
     let soundInRange = false;
     let soundStartMs = 0;
     let lostSoundFrames = 0;
+    let soundPrevDistM: number | null = null;
+    let soundPrevDistMs: number | null = null;
+    let smoothApproachVelMps: number | null = null;
 
     // Smoothed point (0..1 in video coords, origin top-left)
     let smoothSoundX: number | null = null;
@@ -233,6 +243,9 @@ export function initHandControls(audio: AudioEngine): void {
         smoothReverb = null;
         reverbActive = false;
         soundInRange = false;
+        soundPrevDistM = null;
+        soundPrevDistMs = null;
+        smoothApproachVelMps = null;
         lostSoundFrames = 0;
     };
 
@@ -259,6 +272,8 @@ export function initHandControls(audio: AudioEngine): void {
             worldLandmarks?: Landmark[];
             wristX: number;
         };
+
+        const nowMs = performance.now();
 
         const hands: Hand[] = [];
         for (let i = 0; i < result.landmarks.length; i++) {
@@ -346,6 +361,19 @@ export function initHandControls(audio: AudioEngine): void {
                     ? dist <= RIGHT_HAND_RANGE_EXIT_M
                     : dist <= RIGHT_HAND_RANGE_ENTER_M;
 
+                // Estimate approach speed (m/s) from distance delta; positive means moving closer.
+                if (soundDistM !== null) {
+                    if (soundPrevDistM !== null && soundPrevDistMs !== null) {
+                        const dt = (nowMs - soundPrevDistMs) / 1000;
+                        if (dt > 0.001) {
+                            const approachVel = (soundPrevDistM - soundDistM) / dt;
+                            smoothApproachVelMps = ema(smoothApproachVelMps, approachVel, ENTRY_VELOCITY_EMA_ALPHA);
+                        }
+                    }
+                    soundPrevDistM = soundDistM;
+                    soundPrevDistMs = nowMs;
+                }
+
                 const handScale = Math.max(0.0001, dist2D(wrist2d, middleMcp));
                 const pinchRatio = dist2D(thumbTip, indexTip) / handScale;
                 const reverbRaw = clamp(
@@ -377,6 +405,15 @@ export function initHandControls(audio: AudioEngine): void {
                     // Crossing into range => onset ("pluck").
                     if (!soundInRange) {
                         soundInRange = true;
+                        // Velocity-dependent attack shaping for the onset.
+                        const v = Math.max(0, smoothApproachVelMps ?? 0);
+                        const t = clamp(
+                            (v - ENTRY_VELOCITY_MIN_MPS) / (ENTRY_VELOCITY_MAX_MPS - ENTRY_VELOCITY_MIN_MPS),
+                            0,
+                            1
+                        );
+                        const attack = ENTRY_ATTACK_SLOW_S * (1 - t) + ENTRY_ATTACK_FAST_S * t;
+                        audio.setHandAttackSeconds(attack);
                         const { width, height } = getCanvasSize();
                         addRipple(waveX * width, (1 - pitchY) * height);
                     }

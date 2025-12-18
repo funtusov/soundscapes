@@ -124,6 +124,9 @@ export class AudioEngine {
     // Current mode instance
     private currentMode: SynthMode | null = null;
 
+    // Hand (webcam) onset shaping
+    private handAttackSeconds: number | null = null;
+
     constructor() {
         // Silent audio for iOS unlock
         this.silentAudio = new Audio("data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYNAAAAAAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAABhgC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAAYYNAAAAAAAAAAAAAAAAAAAA");
@@ -223,6 +226,10 @@ export class AudioEngine {
      */
     private getEngineContext(touchId?: TouchId): EngineContext {
         const isHand = typeof touchId === 'string' && touchId.startsWith('hand');
+        const baseEnvelope = ADSR_PRESETS[this.envelopeIndex];
+        const envelope = isHand && this.handAttackSeconds !== null
+            ? { ...baseEnvelope, attack: clamp(this.handAttackSeconds, 0.001, 0.25) }
+            : baseEnvelope;
         return {
             ctx: this.ctx!,
             filter: this.filter!,
@@ -234,7 +241,7 @@ export class AudioEngine {
             scaleType: this.scaleType,
             rangeOctaves: this.rangeOctaves,
             rangeBaseFreq: this.locationBaseFreqs[this.rangeLocation],
-            envelope: ADSR_PRESETS[this.envelopeIndex],
+            envelope,
             arpEnabled: this.arpEnabled,
             arpRate: this.arpRate,
             orientationParams: this.orientationParams,
@@ -245,6 +252,11 @@ export class AudioEngine {
             setReverb: (decay, wet, dry) => this.setReverbParams(decay, wet, dry),
             setReverbWet: (wet) => this.setReverbWet(wet),
         };
+    }
+
+    /** Hand (webcam): set attack time (seconds) for the next onset. */
+    setHandAttackSeconds(seconds: number): void {
+        this.handAttackSeconds = seconds;
     }
 
     initMode(): void {
