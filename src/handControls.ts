@@ -43,8 +43,9 @@ const ASSUMED_CAMERA_FOV_DEG = 60;
 const RIGHT_HAND_REF_LEN_M = 0.07; // approx wrist → middle MCP
 
 // Entry velocity → attack shaping (m/s → seconds).
-const ENTRY_VELOCITY_MIN_MPS = 0.05;
-const ENTRY_VELOCITY_MAX_MPS = 1.0;
+const ENTRY_VELOCITY_MIN_MPS = 0.02;
+const ENTRY_VELOCITY_MAX_MPS = 0.45;
+const ENTRY_VELOCITY_CURVE = 0.5;
 const ENTRY_ATTACK_SLOW_S = 0.12;
 const ENTRY_ATTACK_FAST_S = 0.008;
 const ENTRY_VELOCITY_EMA_ALPHA = 0.25;
@@ -407,11 +408,12 @@ export function initHandControls(audio: AudioEngine): void {
                         soundInRange = true;
                         // Velocity-dependent attack shaping for the onset.
                         const v = Math.max(0, smoothApproachVelMps ?? 0);
-                        const t = clamp(
+                        const tLinear = clamp(
                             (v - ENTRY_VELOCITY_MIN_MPS) / (ENTRY_VELOCITY_MAX_MPS - ENTRY_VELOCITY_MIN_MPS),
                             0,
                             1
                         );
+                        const t = Math.pow(tLinear, ENTRY_VELOCITY_CURVE);
                         const attack = ENTRY_ATTACK_SLOW_S * (1 - t) + ENTRY_ATTACK_FAST_S * t;
                         audio.setHandAttackSeconds(attack);
                         const { width, height } = getCanvasSize();
