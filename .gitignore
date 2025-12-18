@@ -1,3 +1,7 @@
 .netlify/
 node_modules/
 dist/
+
+# Capacitor native platforms
+ios/
+android/
