@@ -7,10 +7,9 @@
  *   - Left hand: resonance (height) + filter cutoff (palm orientation)
  *   - Right hand: dual-zone control + reverb (pinch)
  *     - Pad zone (close): continuous pad/swell control
- *     - Pluck zone (mid-range): forward-back jab triggers pluck
- *       - Like plucking a string: forward = displacement, sound on pullback
- *       - Sustained forward into pad zone = pad, not pluck
- *       - Speed determines attack sharpness
+ *     - Pluck zone (mid-range): hover shows target, fast pullback triggers pluck
+ *       - Pullback speed determines attack sharpness
+ *       - Moving forward into pad zone = pad, not pluck
  */
 
 import type { AudioEngine } from './AudioEngine';
@@ -78,8 +77,6 @@ const XY_CENTER_X = 0.5;
 const XY_CENTER_Y = IS_MOBILE ? 0.5 : 0.6;
 
 // Pluck velocity thresholds (m/s) - determines attack sharpness.
-// Mobile needs higher threshold due to hand jitter from holding phone.
-const PLUCK_MIN_VELOCITY_MPS = IS_MOBILE ? 0.35 : 0.25;
 const PLUCK_MAX_VELOCITY_MPS = IS_MOBILE ? 1.5 : 1.2;
 const PLUCK_VELOCITY_CURVE = 0.4;
 const PLUCK_ATTACK_SLOW_S = 0.02;
@@ -90,10 +87,9 @@ const PLUCK_RELEASE_S = 0.08;
 // Higher on mobile to prevent accidental re-triggers.
 const PLUCK_REARM_VELOCITY_MPS = IS_MOBILE ? 0.15 : 0.1;
 
-// Pluck gesture detection: only trigger on forward-back jab, not sustained forward.
-// If hand continues into pad zone, it's a pad entry, not a pluck.
-const PLUCK_PENDING_TIMEOUT_MS = 150;  // Max time to wait for pullback
-const PLUCK_PULLBACK_VELOCITY_MPS = -0.1;  // Negative = moving away from camera
+// Pluck gesture: fast pullback while hovering in pluck zone.
+// Negative velocity = moving away from camera.
+const PLUCK_PULLBACK_MIN_MPS = 0.2;  // Minimum pullback speed to trigger pluck
 
 // Entry velocity → attack shaping for pad zone (m/s → seconds).
 // Mobile uses heavier smoothing (lower alpha) to reduce jitter.
@@ -241,11 +237,7 @@ export function initHandControls(audio: AudioEngine): void {
     // Pluck zone state.
     let pluckArmed = true;  // Ready to trigger next pluck
     let inPluckMode = false;  // Currently playing a pluck (not pad)
-    let pluckPending = false;  // Forward motion detected, waiting for pullback
-    let pluckPendingStartMs = 0;  // When pending started
-    let pluckPendingVelocity = 0;  // Velocity when pluck was armed (for attack shaping)
-    let pluckPendingX = 0;  // Position when pluck was armed
-    let pluckPendingY = 0;
+    let inPluckZoneHover = false;  // Currently hovering in pluck zone
 
     // Smoothed point (0..1 in video coords, origin top-left)
     let smoothSoundX: number | null = null;
@@ -329,8 +321,7 @@ export function initHandControls(audio: AudioEngine): void {
         lostSoundFrames = 0;
         pluckArmed = true;
         inPluckMode = false;
-        pluckPending = false;
-        pluckPendingStartMs = 0;
+        inPluckZoneHover = false;
         soundLastUpdateMs = 0;
     };
 
@@ -503,35 +494,26 @@ export function initHandControls(audio: AudioEngine): void {
                     pluckArmed = true;
                 }
 
-                // Handle pluck zone: forward-back jab gesture.
-                // Like plucking a string: forward = displacement, sound on pullback/release.
-                const currentVelRaw = smoothApproachVelMps ?? 0;
+                // Handle pluck zone: hover shows indicator, fast pullback triggers pluck.
+                const pullbackVel = -(smoothApproachVelMps ?? 0);  // Positive = moving away
 
-                if (inPluckZone && pluckArmed && !soundActive && !pluckPending) {
-                    // Forward motion in pluck zone - start pending pluck.
-                    const jabVel = Math.max(0, Math.max(smoothApproachVelMps ?? 0, approachVelNowMps));
-                    if (jabVel >= PLUCK_MIN_VELOCITY_MPS) {
-                        pluckPending = true;
-                        pluckPendingStartMs = Date.now();
-                        pluckPendingVelocity = jabVel;
-                        pluckPendingX = waveX;
-                        pluckPendingY = pitchY;
+                if (inPluckZone && !soundActive && !inPadZone) {
+                    // Show hover indicator in pluck zone.
+                    if (!inPluckZoneHover) {
+                        inPluckZoneHover = true;
                     }
-                }
+                    const { width, height } = getCanvasSize();
+                    setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID, true);  // hover = true
 
-                // Check for pullback to confirm pluck.
-                if (pluckPending) {
-                    const pendingAge = Date.now() - pluckPendingStartMs;
-
-                    // Pullback detected (velocity reversed) → trigger pluck!
-                    if (currentVelRaw <= PLUCK_PULLBACK_VELOCITY_MPS) {
-                        pluckPending = false;
+                    // Fast pullback triggers pluck.
+                    if (pluckArmed && pullbackVel >= PLUCK_PULLBACK_MIN_MPS) {
                         pluckArmed = false;
                         inPluckMode = true;
+                        inPluckZoneHover = false;
 
-                        // Velocity-dependent attack shaping (faster jab = sharper attack).
+                        // Velocity-dependent attack shaping (faster pullback = sharper attack).
                         const tLinear = clamp(
-                            (pluckPendingVelocity - PLUCK_MIN_VELOCITY_MPS) / (PLUCK_MAX_VELOCITY_MPS - PLUCK_MIN_VELOCITY_MPS),
+                            (pullbackVel - PLUCK_PULLBACK_MIN_MPS) / (PLUCK_MAX_VELOCITY_MPS - PLUCK_PULLBACK_MIN_MPS),
                             0,
                             1
                         );
@@ -540,23 +522,22 @@ export function initHandControls(audio: AudioEngine): void {
                         audio.setHandAttackSeconds(attack);
                         audio.setHandReleaseSeconds(PLUCK_RELEASE_S);
 
-                        // Play a short pluck note at the position where forward motion was captured.
+                        // Play pluck note.
                         soundActive = true;
                         soundStartMs = Date.now();
                         soundLastUpdateMs = Date.now();
                         audio.start(HAND_TOUCH_ID);
-                        audio.update(pluckPendingX, pluckPendingY, HAND_TOUCH_ID, 0);
+                        audio.update(waveX, pitchY, HAND_TOUCH_ID, 0);
 
-                        const { width, height } = getCanvasSize();
-                        addRipple(pluckPendingX * width, (1 - pluckPendingY) * height);
-                        setCursor(pluckPendingX * width, (1 - pluckPendingY) * height, HAND_TOUCH_ID);
+                        addRipple(waveX * width, (1 - pitchY) * height);
+                        setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID);  // Switch to active cursor
                     }
-                    // Timeout without pullback → cancel pending.
-                    else if (pendingAge >= PLUCK_PENDING_TIMEOUT_MS) {
-                        pluckPending = false;
+                } else if (inPluckZoneHover && !inPluckZone) {
+                    // Exited pluck zone without plucking.
+                    inPluckZoneHover = false;
+                    if (!soundActive) {
+                        removeCursor(HAND_TOUCH_ID);
                     }
-                    // Entering pad zone cancels pending (it's a sustained forward, not a jab).
-                    // This is handled below in pad zone logic.
                 }
 
                 // Auto-release pluck after max duration.
@@ -569,10 +550,9 @@ export function initHandControls(audio: AudioEngine): void {
 
                 // Handle pad zone: continuous control.
                 if (inPadZone) {
-                    // Clear pluck mode and cancel pending pluck when entering pad zone.
-                    // (Sustained forward motion = pad, not pluck.)
+                    // Clear pluck mode and hover when entering pad zone.
                     inPluckMode = false;
-                    pluckPending = false;
+                    inPluckZoneHover = false;
 
                     // Entering pad zone from outside.
                     if (!soundInRange) {

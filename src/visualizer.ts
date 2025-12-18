@@ -24,6 +24,7 @@ type TouchId = number | string;
 interface CursorPos {
     x: number;
     y: number;
+    hover?: boolean;  // Hover mode: shows ring instead of glow (for pluck zone)
 }
 
 interface Ripple {
@@ -250,20 +251,38 @@ function drawCursor() {
     if (cursors.size === 0) return;
 
     for (const [, pos] of cursors) {
-        const gradient = ctx.createRadialGradient(pos.x, pos.y, CURSOR_DOT_RADIUS, pos.x, pos.y, CURSOR_GLOW_RADIUS);
-        gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
-        gradient.addColorStop(0.2, 'rgba(0, 255, 204, 0.8)');
-        gradient.addColorStop(1, 'rgba(0, 255, 204, 0)');
+        if (pos.hover) {
+            // Hover mode: dashed ring to indicate "ready to pluck"
+            ctx.strokeStyle = 'rgba(255, 200, 100, 0.7)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 4]);
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, CURSOR_GLOW_RADIUS * 0.8, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
 
-        ctx.fillStyle = gradient;
-        ctx.beginPath();
-        ctx.arc(pos.x, pos.y, CURSOR_GLOW_RADIUS, 0, Math.PI * 2);
-        ctx.fill();
+            // Small dot in center
+            ctx.fillStyle = 'rgba(255, 200, 100, 0.8)';
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, CURSOR_DOT_RADIUS * 0.7, 0, Math.PI * 2);
+            ctx.fill();
+        } else {
+            // Active mode: full glow
+            const gradient = ctx.createRadialGradient(pos.x, pos.y, CURSOR_DOT_RADIUS, pos.x, pos.y, CURSOR_GLOW_RADIUS);
+            gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+            gradient.addColorStop(0.2, 'rgba(0, 255, 204, 0.8)');
+            gradient.addColorStop(1, 'rgba(0, 255, 204, 0)');
 
-        ctx.fillStyle = '#fff';
-        ctx.beginPath();
-        ctx.arc(pos.x, pos.y, CURSOR_DOT_RADIUS, 0, Math.PI * 2);
-        ctx.fill();
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, CURSOR_GLOW_RADIUS, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, CURSOR_DOT_RADIUS, 0, Math.PI * 2);
+            ctx.fill();
+        }
     }
 }
 
@@ -285,8 +304,8 @@ export function addRipple(x: number, y: number) {
     ripples.push({ x, y, r: RIPPLE_INITIAL_RADIUS, o: 1.0 });
 }
 
-export function setCursor(x: number, y: number, touchId: TouchId = 'mouse') {
-    cursors.set(touchId, { x, y });
+export function setCursor(x: number, y: number, touchId: TouchId = 'mouse', hover = false) {
+    cursors.set(touchId, { x, y, hover });
 }
 
 export function removeCursor(touchId: TouchId = 'mouse') {
