@@ -5,9 +5,9 @@
  * - Uses MediaPipe Tasks Vision HandLandmarker (loaded lazily on enable).
  * - Two-hand "theremin-ish" mapping:
  *   - Left hand: resonance (height) + filter cutoff (palm orientation)
- *   - Right hand: XY in an interaction plane + reverb (pinch)
- *     - In-plane: moves the active pointer (waveform/pitch)
- *     - Pluck: quick forward jab (Z) triggers a short note
+ *   - Right hand: proximity-gated play + reverb (pinch)
+ *     - Within ~40cm: continuous control (waveform/pitch)
+ *     - Crossing into range: "pluck" (note onset)
  */
 
 import type { AudioEngine } from './AudioEngine';
@@ -35,19 +35,12 @@ const REVERB_EMA_ALPHA = 0.25;
 const PINCH_RATIO_REVERB_MIN = 0.25;
 const PINCH_RATIO_REVERB_MAX = 0.9;
 
-// Right-hand interaction plane + pluck gesture (worldLandmarks.z, meters).
-const PLANE_CENTER_EMA_ALPHA = 0.06;
-const PLANE_TOL_SCALE = 0.25;
-const PLANE_TOL_MIN_M = 0.015;
-const PLANE_TOL_MAX_M = 0.05;
-
-const PLUCK_DEPTH_SCALE = 0.45;
-const PLUCK_DEPTH_MIN_M = 0.02;
-const PLUCK_DEPTH_MAX_M = 0.08;
-const PLUCK_FORWARD_VELOCITY_MPS = 0.35;
-const PLUCK_INPLANE_GRACE_MS = 200;
-const PLUCK_COOLDOWN_MS = 180;
-const PLUCK_NOTE_HOLD_MS = 110;
+// Right-hand proximity gating (estimated from hand size in image).
+// The estimate is approximate (depends on camera FOV + hand size).
+const RIGHT_HAND_RANGE_ENTER_M = 0.40;
+const RIGHT_HAND_RANGE_EXIT_M = 0.46;
+const ASSUMED_CAMERA_FOV_DEG = 60;
+const RIGHT_HAND_REF_LEN_M = 0.07; // approx wrist → middle MCP
 
 type Status = 'off' | 'loading' | 'show' | 'filter' | 'sound' | 'both' | 'error';
 
@@ -55,21 +48,18 @@ function dist2D(a: NormalizedLandmark, b: NormalizedLandmark): number {
     return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-function dist3D(a: Landmark, b: Landmark): number {
-    return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
-}
+function estimateDistanceMeters(video: HTMLVideoElement, a: NormalizedLandmark, b: NormalizedLandmark): number | null {
+    const w = video.videoWidth || 0;
+    const h = video.videoHeight || 0;
+    if (w <= 0 || h <= 0) return null;
 
-function meanZ(hand3d: Landmark[] | undefined, indices: number[]): number | null {
-    if (!hand3d) return null;
-    let sum = 0;
-    let count = 0;
-    for (const idx of indices) {
-        const p = hand3d[idx];
-        if (!p) continue;
-        sum += p.z;
-        count += 1;
-    }
-    return count > 0 ? sum / count : null;
+    const px = Math.hypot((a.x - b.x) * w, (a.y - b.y) * h);
+    if (px < 2) return null;
+
+    const fovRad = ASSUMED_CAMERA_FOV_DEG * Math.PI / 180;
+    const focalPx = (w / 2) / Math.tan(fovRad / 2);
+
+    return (RIGHT_HAND_REF_LEN_M * focalPx) / px;
 }
 
 function ema(prev: number | null, next: number, alpha: number): number {
@@ -168,19 +158,9 @@ export function initHandControls(audio: AudioEngine): void {
 
     // Tracking state
     let soundActive = false;
+    let soundInRange = false;
     let soundStartMs = 0;
     let lostSoundFrames = 0;
-
-    // Right-hand interaction plane (depth) + pluck gesture tracking
-    let soundPlaneZ: number | null = null;
-    let soundPrevZ: number | null = null;
-    let soundPrevMs: number | null = null;
-    let soundLastInPlaneMs = 0;
-    let soundLastWaveX = 0.5;
-    let soundLastPitchY = 0.5;
-    let pluckSeq = 0;
-    let pluckArmed = true;
-    let pluckCooldownUntilMs = 0;
 
     // Smoothed point (0..1 in video coords, origin top-left)
     let smoothSoundX: number | null = null;
@@ -222,21 +202,8 @@ export function initHandControls(audio: AudioEngine): void {
         const duration = (Date.now() - soundStartMs) / 1000;
         audio.stop(HAND_TOUCH_ID, duration);
         soundActive = false;
+        soundInRange = false;
         removeCursor(HAND_TOUCH_ID);
-    };
-
-    const triggerPluck = (waveX: number, pitchY: number) => {
-        const pluckId = `hand_pluck_${pluckSeq++}`;
-        audio.start(pluckId);
-        audio.update(waveX, pitchY, pluckId, 0);
-
-        const pluckStartMs = Date.now();
-        const { width, height } = getCanvasSize();
-        addRipple(waveX * width, (1 - pitchY) * height);
-
-        setTimeout(() => {
-            audio.stop(pluckId, (Date.now() - pluckStartMs) / 1000, { applyReleaseEnvelope: false });
-        }, PLUCK_NOTE_HOLD_MS);
     };
 
     const teardownCamera = () => {
@@ -265,15 +232,7 @@ export function initHandControls(audio: AudioEngine): void {
         smoothResonance = null;
         smoothReverb = null;
         reverbActive = false;
-        soundPlaneZ = null;
-        soundPrevZ = null;
-        soundPrevMs = null;
-        soundLastInPlaneMs = 0;
-        soundLastWaveX = 0.5;
-        soundLastPitchY = 0.5;
-        pluckSeq = 0;
-        pluckArmed = true;
-        pluckCooldownUntilMs = 0;
+        soundInRange = false;
         lostSoundFrames = 0;
     };
 
@@ -300,8 +259,6 @@ export function initHandControls(audio: AudioEngine): void {
             worldLandmarks?: Landmark[];
             wristX: number;
         };
-
-        const nowMs = performance.now();
 
         const hands: Hand[] = [];
         for (let i = 0; i < result.landmarks.length; i++) {
@@ -346,6 +303,7 @@ export function initHandControls(audio: AudioEngine): void {
 
         const hasFilter = !!filterHand;
         const hasSound = !!soundHand;
+        let soundDistM: number | null = null;
 
         // Left hand: resonance (height) + palm orientation → filter cutoff.
         if (filterHand) {
@@ -364,7 +322,8 @@ export function initHandControls(audio: AudioEngine): void {
             }
         }
 
-        // Right hand: X position → waveform shape, Y position → pitch, pinch openness → reverb.
+        // Right hand: within ~40cm => continuous sound; crossing into range => onset ("pluck").
+        // Also: pinch openness controls reverb.
         if (soundHand) {
             const thumbTip = soundHand.landmarks[4];
             const indexTip = soundHand.landmarks[8];
@@ -372,60 +331,6 @@ export function initHandControls(audio: AudioEngine): void {
             const middleMcp = soundHand.landmarks[9];
 
             if (thumbTip && indexTip && wrist2d && middleMcp) {
-                // Depth plane + pluck gesture (uses 3D world landmarks when available).
-                let inPlane = true;
-                const depthZ = meanZ(soundHand.worldLandmarks, [0, 5, 9, 13, 17]);
-                const wrist3d = soundHand.worldLandmarks?.[0];
-                const middleMcp3d = soundHand.worldLandmarks?.[9];
-                const refLen = wrist3d && middleMcp3d ? dist3D(wrist3d, middleMcp3d) : 0.08;
-                const planeTol = clamp(refLen * PLANE_TOL_SCALE, PLANE_TOL_MIN_M, PLANE_TOL_MAX_M);
-                const pluckDelta = clamp(refLen * PLUCK_DEPTH_SCALE, PLUCK_DEPTH_MIN_M, PLUCK_DEPTH_MAX_M);
-
-                if (depthZ !== null) {
-                    if (soundPlaneZ === null) soundPlaneZ = depthZ;
-                    const planeZ = soundPlaneZ ?? depthZ;
-
-                    inPlane = Math.abs(depthZ - planeZ) <= planeTol;
-
-                    // Forward velocity (m/s). Note: smaller z means closer to camera.
-                    let forwardVel = 0;
-                    if (soundPrevZ !== null && soundPrevMs !== null) {
-                        const dt = (nowMs - soundPrevMs) / 1000;
-                        if (dt > 0.001) {
-                            forwardVel = (soundPrevZ - depthZ) / dt;
-                        }
-                    }
-                    soundPrevZ = depthZ;
-                    soundPrevMs = nowMs;
-
-                    if (inPlane) {
-                        soundLastInPlaneMs = nowMs;
-                        // Slowly adapt plane center to user drift (but don't shift during pluck cooldown).
-                        if (nowMs >= pluckCooldownUntilMs) {
-                            soundPlaneZ = ema(soundPlaneZ, depthZ, PLANE_CENTER_EMA_ALPHA);
-                        }
-                    }
-
-                    const recentlyInPlane = nowMs - soundLastInPlaneMs <= PLUCK_INPLANE_GRACE_MS;
-                    const forwardBeyond = depthZ < planeZ - pluckDelta;
-
-                    if (
-                        pluckArmed &&
-                        nowMs >= pluckCooldownUntilMs &&
-                        recentlyInPlane &&
-                        forwardBeyond &&
-                        forwardVel > PLUCK_FORWARD_VELOCITY_MPS
-                    ) {
-                        triggerPluck(soundLastWaveX, soundLastPitchY);
-                        pluckArmed = false;
-                        pluckCooldownUntilMs = nowMs + PLUCK_COOLDOWN_MS;
-                    }
-
-                    if (!pluckArmed && inPlane && nowMs >= pluckCooldownUntilMs) {
-                        pluckArmed = true;
-                    }
-                }
-
                 // Use a stable palm point for position controls (so pinching doesn't shift pitch/shape too much).
                 smoothSoundX = ema(smoothSoundX, middleMcp.x, POS_EMA_ALPHA);
                 smoothSoundY = ema(smoothSoundY, middleMcp.y, POS_EMA_ALPHA);
@@ -434,11 +339,12 @@ export function initHandControls(audio: AudioEngine): void {
                 const waveX = clamp(1 - smoothSoundX, 0, 1);
                 const pitchY = clamp(1 - smoothSoundY, 0, 1);
 
-                // Only move the "active pointer" while in the interaction plane.
-                if (inPlane || !soundActive) {
-                    soundLastWaveX = waveX;
-                    soundLastPitchY = pitchY;
-                }
+                soundDistM = video ? estimateDistanceMeters(video, wrist2d, middleMcp) : null;
+                const dist = soundDistM ?? RIGHT_HAND_RANGE_ENTER_M;
+
+                const shouldBeInRange = soundInRange
+                    ? dist <= RIGHT_HAND_RANGE_EXIT_M
+                    : dist <= RIGHT_HAND_RANGE_ENTER_M;
 
                 const handScale = Math.max(0.0001, dist2D(wrist2d, middleMcp));
                 const pinchRatio = dist2D(thumbTip, indexTip) / handScale;
@@ -467,20 +373,34 @@ export function initHandControls(audio: AudioEngine): void {
                     audio.setReverbParams(0, wet, dry);
                 }
 
-                if (!soundActive) {
-                    soundActive = true;
-                    soundStartMs = Date.now();
-                    audio.start(HAND_TOUCH_ID);
+                if (shouldBeInRange) {
+                    // Crossing into range => onset ("pluck").
+                    if (!soundInRange) {
+                        soundInRange = true;
+                        const { width, height } = getCanvasSize();
+                        addRipple(waveX * width, (1 - pitchY) * height);
+                    }
+
+                    if (!soundActive) {
+                        soundActive = true;
+                        soundStartMs = Date.now();
+                        audio.start(HAND_TOUCH_ID);
+                    }
+
+                    const duration = (Date.now() - soundStartMs) / 1000;
+                    audio.update(waveX, pitchY, HAND_TOUCH_ID, duration);
+
                     const { width, height } = getCanvasSize();
-                    addRipple(soundLastWaveX * width, (1 - soundLastPitchY) * height);
+                    setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID);
+                } else {
+                    // Out of range => silence.
+                    if (soundInRange) {
+                        soundInRange = false;
+                    }
+                    if (soundActive) {
+                        stopHandVoice();
+                    }
                 }
-
-                const duration = (Date.now() - soundStartMs) / 1000;
-                audio.update(soundLastWaveX, soundLastPitchY, HAND_TOUCH_ID, duration);
-
-                const { width, height } = getCanvasSize();
-                // Cursor follows the right hand position.
-                setCursor(soundLastWaveX * width, (1 - soundLastPitchY) * height, HAND_TOUCH_ID);
 
                 lostSoundFrames = 0;
             } else {
@@ -494,10 +414,11 @@ export function initHandControls(audio: AudioEngine): void {
             stopHandVoice();
         }
 
+        const distSuffix = soundDistM !== null && isFinite(soundDistM) ? `d=${soundDistM.toFixed(2)}m` : undefined;
         if (!hasFilter && !hasSound) setStatus('show');
-        else if (hasFilter && hasSound) setStatus('both');
+        else if (hasFilter && hasSound) setStatus('both', distSuffix);
         else if (hasFilter) setStatus('filter');
-        else setStatus('sound');
+        else setStatus('sound', distSuffix);
     };
 
     const loop = async () => {

@@ -39,7 +39,7 @@ Enable camera hand control via the **Hand** button (bottom bar).
 | **Right hand left/right** | Waveform shape |
 | **Right hand up/down** | Pitch |
 | **Right hand pinch openness** | Reverb |
-| **Right hand quick forward jab (Z)** | Pluck (triggers a short note) |
+| **Right hand closer than ~40cm** | Continuous play (moving in triggers onset) |
 | **Show/hide right hand** | Start/stop sound |
 
 ### Shake
