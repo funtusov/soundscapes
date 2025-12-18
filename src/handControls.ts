@@ -5,7 +5,7 @@
  * - Uses MediaPipe Tasks Vision HandLandmarker (loaded lazily on enable).
  * - Two-hand "theremin-ish" mapping:
  *   - Left hand: resonance (height) + filter cutoff (palm orientation)
- *   - Right hand: pitch (X position) + waveform shape (pinch openness)
+ *   - Right hand: waveform shape (left/right) + pitch (up/down) + reverb (pinch)
  */
 
 import type { AudioEngine } from './AudioEngine';
@@ -26,12 +26,12 @@ const LOST_HAND_FRAMES_TO_RELEASE = 6;
 const POS_EMA_ALPHA = 0.35;
 const PALM_EMA_ALPHA = 0.25;
 const RESONANCE_EMA_ALPHA = 0.25;
-const SHAPE_EMA_ALPHA = 0.35;
+const REVERB_EMA_ALPHA = 0.25;
 
-// Right-hand pinch openness → waveform morph (0..1)
-// shape=0 => pinched, shape=1 => open pinch.
-const PINCH_RATIO_SHAPE_MIN = 0.25;
-const PINCH_RATIO_SHAPE_MAX = 0.9;
+// Right-hand pinch openness → reverb (0..1)
+// 0 => pinched, 1 => open pinch.
+const PINCH_RATIO_REVERB_MIN = 0.25;
+const PINCH_RATIO_REVERB_MAX = 0.9;
 
 type Status = 'off' | 'loading' | 'show' | 'filter' | 'sound' | 'both' | 'error';
 
@@ -140,9 +140,11 @@ export function initHandControls(audio: AudioEngine): void {
 
     // Smoothed point (0..1 in video coords, origin top-left)
     let smoothSoundX: number | null = null;
+    let smoothSoundY: number | null = null;
     let smoothPalm: number | null = null;
     let smoothResonance: number | null = null;
-    let smoothShape: number | null = null;
+    let smoothReverb: number | null = null;
+    let reverbActive = false;
 
     const setStatus = (status: Status, detail?: string) => {
         const text = detail ? `${status}:${detail}` : status;
@@ -200,9 +202,11 @@ export function initHandControls(audio: AudioEngine): void {
         }
 
         smoothSoundX = null;
+        smoothSoundY = null;
         smoothPalm = null;
         smoothResonance = null;
-        smoothShape = null;
+        smoothReverb = null;
+        reverbActive = false;
         lostSoundFrames = 0;
     };
 
@@ -291,42 +295,63 @@ export function initHandControls(audio: AudioEngine): void {
             }
         }
 
-        // Right hand: X position → pitch, pinch openness → shape.
+        // Right hand: X position → waveform shape, Y position → pitch, pinch openness → reverb.
         if (soundHand) {
-            const indexTip = soundHand.landmarks[8];
             const thumbTip = soundHand.landmarks[4];
+            const indexTip = soundHand.landmarks[8];
             const wrist2d = soundHand.landmarks[0];
             const middleMcp = soundHand.landmarks[9];
 
-            if (indexTip && thumbTip && wrist2d && middleMcp) {
-                smoothSoundX = ema(smoothSoundX, indexTip.x, POS_EMA_ALPHA);
+            if (thumbTip && indexTip && wrist2d && middleMcp) {
+                // Use a stable palm point for position controls (so pinching doesn't shift pitch/shape too much).
+                smoothSoundX = ema(smoothSoundX, middleMcp.x, POS_EMA_ALPHA);
+                smoothSoundY = ema(smoothSoundY, middleMcp.y, POS_EMA_ALPHA);
 
                 // Mirror X to match typical selfie camera expectation.
-                const pitch = clamp(1 - smoothSoundX, 0, 1);
+                const waveX = clamp(1 - smoothSoundX, 0, 1);
+                const pitchY = clamp(1 - smoothSoundY, 0, 1);
 
                 const handScale = Math.max(0.0001, dist2D(wrist2d, middleMcp));
                 const pinchRatio = dist2D(thumbTip, indexTip) / handScale;
-                const shapeRaw = clamp(
-                    (pinchRatio - PINCH_RATIO_SHAPE_MIN) / (PINCH_RATIO_SHAPE_MAX - PINCH_RATIO_SHAPE_MIN),
+                const reverbRaw = clamp(
+                    (pinchRatio - PINCH_RATIO_REVERB_MIN) / (PINCH_RATIO_REVERB_MAX - PINCH_RATIO_REVERB_MIN),
                     0,
                     1
                 );
-                smoothShape = ema(smoothShape, shapeRaw, SHAPE_EMA_ALPHA);
+                smoothReverb = ema(smoothReverb, reverbRaw, REVERB_EMA_ALPHA);
+
+                // Pinch controls reverb amount (wetness). Curve gives more precision at low values.
+                const wetT = smoothReverb ?? 0;
+                const wet = clamp(wetT * wetT * 0.85, 0, 0.85);
+                const wantsReverb = wet > 0.01;
+
+                if (wantsReverb && !reverbActive) {
+                    audio.setReverbLevel('on');
+                    reverbActive = true;
+                } else if (!wantsReverb && reverbActive) {
+                    audio.setReverbLevel('off');
+                    reverbActive = false;
+                }
+
+                if (reverbActive) {
+                    const dry = 1 - wet * 0.4;
+                    audio.setReverbParams(0, wet, dry);
+                }
 
                 if (!soundActive) {
                     soundActive = true;
                     soundStartMs = Date.now();
                     audio.start(HAND_TOUCH_ID);
                     const { width, height } = getCanvasSize();
-                    addRipple(pitch * width, indexTip.y * height);
+                    addRipple(waveX * width, clamp(middleMcp.y, 0, 1) * height);
                 }
 
                 const duration = (Date.now() - soundStartMs) / 1000;
-                audio.update(smoothShape ?? 0, pitch, HAND_TOUCH_ID, duration);
+                audio.update(waveX, pitchY, HAND_TOUCH_ID, duration);
 
                 const { width, height } = getCanvasSize();
-                // Cursor follows the pitch hand on screen (theremin feel).
-                setCursor(pitch * width, indexTip.y * height, HAND_TOUCH_ID);
+                // Cursor follows the right hand position.
+                setCursor(waveX * width, clamp(middleMcp.y, 0, 1) * height, HAND_TOUCH_ID);
 
                 lostSoundFrames = 0;
             } else {

@@ -36,8 +36,9 @@ Enable camera hand control via the **Hand** button (bottom bar).
 |--------|--------|
 | **Left hand height (Y)** | Filter resonance (higher → more resonant) |
 | **Left hand palm orientation** | LPF cutoff (palm up → 80Hz, palm horizontal → 8000Hz) |
-| **Right hand X position** | Pitch |
-| **Right hand pinch openness** | Waveform shape |
+| **Right hand left/right** | Waveform shape |
+| **Right hand up/down** | Pitch |
+| **Right hand pinch openness** | Reverb |
 | **Show/hide right hand** | Start/stop sound |
 
 ### Shake
