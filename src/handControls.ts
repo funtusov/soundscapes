@@ -2,7 +2,8 @@
  * HAND CONTROLS - Webcam hand tracking
  *
  * Implementation notes:
- * - Uses MediaPipe Tasks Vision HandLandmarker (loaded lazily on enable).
+ * - On iOS native app: Uses TrueDepth camera with Vision framework for accurate depth.
+ * - On web: Uses MediaPipe Tasks Vision HandLandmarker (loaded lazily on enable).
  * - Two-hand "theremin-ish" mapping:
  *   - Left hand: resonance (height) + filter cutoff (palm orientation)
  *   - Right hand: dual-zone control + reverb (pinch)
@@ -17,6 +18,40 @@ import { clamp } from './constants';
 import { addRipple, getCanvasSize, removeCursor, setCursor } from './visualizer';
 
 import type { HandLandmarker, HandLandmarkerResult, Landmark, NormalizedLandmark } from '@mediapipe/tasks-vision';
+
+// Capacitor types for native plugin
+interface TrueDepthHandPlugin {
+    isAvailable(): Promise<{ available: boolean }>;
+    start(): Promise<{ success: boolean }>;
+    stop(): Promise<{ success: boolean }>;
+    addListener(event: 'handUpdate', callback: (data: NativeHandUpdate) => void): Promise<{ remove: () => void }>;
+}
+
+interface NativeHandData {
+    handedness?: string;
+    wristX: number;
+    wristY: number;
+    middleMcpX: number;
+    middleMcpY: number;
+    indexTipX: number;
+    indexTipY: number;
+    thumbTipX: number;
+    thumbTipY: number;
+    distanceMeters: number;
+    pinchRatio: number;
+    palmFacing: number;
+    confidence: number;
+}
+
+interface NativeHandUpdate {
+    hands: NativeHandData[];
+}
+
+// Check for Capacitor native plugin
+function getTrueDepthPlugin(): TrueDepthHandPlugin | null {
+    const win = window as unknown as { Capacitor?: { Plugins?: { TrueDepthHand?: TrueDepthHandPlugin } } };
+    return win.Capacitor?.Plugins?.TrueDepthHand ?? null;
+}
 
 const HAND_TOUCH_ID = 'hand';
 
@@ -247,6 +282,10 @@ export function initHandControls(audio: AudioEngine): void {
     let smoothReverb: number | null = null;
     let reverbActive = false;
 
+    // Native TrueDepth tracking state
+    let usingNative = false;
+    let nativeListenerRemove: (() => void) | null = null;
+
     const setStatus = (status: Status, detail?: string) => {
         const text = detail ? `${status}:${detail}` : status;
         handVal.textContent = text;
@@ -287,12 +326,264 @@ export function initHandControls(audio: AudioEngine): void {
         removeCursor(HAND_TOUCH_ID);
     };
 
+    /**
+     * Process hand data from native TrueDepth plugin.
+     * Maps native data to the same control logic as MediaPipe.
+     */
+    const processNativeUpdate = (data: NativeHandUpdate) => {
+        const nowMs = performance.now();
+        const hands = data.hands;
+
+        // Find left and right hands
+        const left = hands.find(h => h.handedness === 'Left') ?? null;
+        const right = hands.find(h => h.handedness === 'Right') ?? null;
+
+        let filterHand = left;
+        let soundHand = right;
+
+        // Fallback if handedness not detected
+        if (!filterHand && !soundHand && hands.length > 0) {
+            if (hands.length === 1) {
+                soundHand = hands[0];
+            } else {
+                const sorted = [...hands].sort((a, b) => a.wristX - b.wristX);
+                filterHand = sorted[0];
+                soundHand = sorted[sorted.length - 1];
+            }
+        }
+
+        const hasFilter = !!filterHand;
+        const hasSound = !!soundHand;
+        let soundDistM: number | null = null;
+
+        // Left hand: resonance (height) + palm orientation → filter cutoff
+        if (filterHand) {
+            const rawRes = clamp(1 - filterHand.wristY, 0, 1);
+            smoothResonance = ema(smoothResonance, rawRes, RESONANCE_EMA_ALPHA);
+            audio.setHandFilterQ(smoothResonance);
+
+            if (filterHand.palmFacing >= 0) {
+                smoothPalm = ema(smoothPalm, filterHand.palmFacing, PALM_EMA_ALPHA);
+                audio.setHandFilterMod(smoothPalm);
+            }
+        }
+
+        // Right hand: zone control + reverb
+        if (soundHand) {
+            const middleMcpX = soundHand.middleMcpX;
+            const middleMcpY = soundHand.middleMcpY;
+
+            smoothSoundX = ema(smoothSoundX, middleMcpX, POS_EMA_ALPHA);
+            smoothSoundY = ema(smoothSoundY, middleMcpY, POS_EMA_ALPHA);
+
+            // Apply X-Y scaling and offset (mirror X for selfie view)
+            const scaledX = XY_CENTER_X + ((smoothSoundX ?? middleMcpX) - XY_CENTER_X) * XY_SCALE;
+            const scaledY = XY_CENTER_Y + ((smoothSoundY ?? middleMcpY) - XY_CENTER_Y) * XY_SCALE;
+            const waveX = clamp(1 - scaledX, 0, 1);
+            const pitchY = clamp(1 - scaledY, 0, 1);
+
+            // Use native depth (already in meters) - much more accurate than MediaPipe estimate
+            soundDistM = soundHand.distanceMeters > 0 ? soundHand.distanceMeters : null;
+            if (soundDistM !== null) {
+                smoothDistM = ema(smoothDistM, soundDistM, DIST_EMA_ALPHA);
+            }
+            const gateDist = smoothDistM ?? soundDistM;
+
+            // Determine zones (using same thresholds)
+            const inPadZone = gateDist === null
+                ? soundInRange
+                : (soundInRange ? gateDist <= PAD_ZONE_EXIT_M : gateDist <= PAD_ZONE_ENTER_M);
+            const inPluckZone = gateDist !== null && gateDist >= PLUCK_ZONE_NEAR_M && gateDist <= PLUCK_ZONE_FAR_M;
+
+            // Estimate approach speed from depth delta
+            let approachVelNowMps = smoothApproachVelMps ?? 0;
+            if (soundDistM !== null) {
+                if (soundPrevDistM !== null && soundPrevDistMs !== null) {
+                    const dt = (nowMs - soundPrevDistMs) / 1000;
+                    if (dt > 0.001) {
+                        const approachVel = (soundPrevDistM - soundDistM) / dt;
+                        approachVelNowMps = approachVel;
+                        smoothApproachVelMps = ema(smoothApproachVelMps, approachVel, ENTRY_VELOCITY_EMA_ALPHA);
+                    }
+                }
+                soundPrevDistM = soundDistM;
+                soundPrevDistMs = nowMs;
+            }
+
+            // Pinch controls reverb (native provides pinchRatio directly)
+            const reverbRaw = clamp(
+                (soundHand.pinchRatio - PINCH_RATIO_REVERB_MIN) / (PINCH_RATIO_REVERB_MAX - PINCH_RATIO_REVERB_MIN),
+                0,
+                1
+            );
+            smoothReverb = ema(smoothReverb, reverbRaw, REVERB_EMA_ALPHA);
+
+            const wetT = smoothReverb ?? 0;
+            const wet = clamp(wetT * wetT * 0.85, 0, 0.85);
+            const wantsReverb = wet > 0.01;
+
+            if (wantsReverb && !reverbActive) {
+                audio.setReverbLevel('on');
+                reverbActive = true;
+            } else if (!wantsReverb && reverbActive) {
+                audio.setReverbLevel('off');
+                reverbActive = false;
+            }
+
+            if (reverbActive) {
+                const dry = 1 - wet * 0.4;
+                audio.setReverbParams(0, wet, dry);
+            }
+
+            // Re-arm pluck when velocity drops low
+            const currentVel = Math.max(0, smoothApproachVelMps ?? 0);
+            if (!pluckArmed && currentVel < PLUCK_REARM_VELOCITY_MPS) {
+                pluckArmed = true;
+            }
+
+            // Handle pluck zone: hover shows indicator, fast pullback triggers pluck
+            const pullbackVel = -(smoothApproachVelMps ?? 0);
+
+            if (inPluckZone && !soundActive && !inPadZone) {
+                if (!inPluckZoneHover) {
+                    inPluckZoneHover = true;
+                }
+                const { width, height } = getCanvasSize();
+                setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID, true);
+
+                if (pluckArmed && pullbackVel >= PLUCK_PULLBACK_MIN_MPS) {
+                    pluckArmed = false;
+                    inPluckMode = true;
+                    inPluckZoneHover = false;
+
+                    const tLinear = clamp(
+                        (pullbackVel - PLUCK_PULLBACK_MIN_MPS) / (PLUCK_MAX_VELOCITY_MPS - PLUCK_PULLBACK_MIN_MPS),
+                        0,
+                        1
+                    );
+                    const t = Math.pow(tLinear, PLUCK_VELOCITY_CURVE);
+                    const attack = PLUCK_ATTACK_SLOW_S * (1 - t) + PLUCK_ATTACK_FAST_S * t;
+                    audio.setHandAttackSeconds(attack);
+                    audio.setHandReleaseSeconds(PLUCK_RELEASE_S);
+
+                    soundActive = true;
+                    soundStartMs = Date.now();
+                    soundLastUpdateMs = Date.now();
+                    audio.start(HAND_TOUCH_ID);
+                    audio.update(waveX, pitchY, HAND_TOUCH_ID, 0);
+
+                    const { width, height } = getCanvasSize();
+                    addRipple(waveX * width, (1 - pitchY) * height);
+                    setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID);
+                }
+            } else if (inPluckZoneHover && !inPluckZone) {
+                inPluckZoneHover = false;
+                if (!soundActive) {
+                    removeCursor(HAND_TOUCH_ID);
+                }
+            }
+
+            // Auto-release pluck after max duration
+            if (inPluckMode && soundActive) {
+                const pluckDuration = Date.now() - soundStartMs;
+                if (pluckDuration >= PLUCK_MAX_DURATION_MS) {
+                    stopHandVoice(PLUCK_RELEASE_S);
+                }
+            }
+
+            // Handle pad zone: continuous control
+            if (inPadZone) {
+                inPluckMode = false;
+                inPluckZoneHover = false;
+
+                if (!soundInRange) {
+                    soundInRange = true;
+                    const v = Math.max(0, Math.max(smoothApproachVelMps ?? 0, approachVelNowMps));
+                    const tLinear = clamp(
+                        (v - PAD_ENTRY_VELOCITY_MIN_MPS) / (PAD_ENTRY_VELOCITY_MAX_MPS - PAD_ENTRY_VELOCITY_MIN_MPS),
+                        0,
+                        1
+                    );
+                    const t = Math.pow(tLinear, PAD_ENTRY_VELOCITY_CURVE);
+                    const attack = PAD_ENTRY_ATTACK_SLOW_S * (1 - t) + PAD_ENTRY_ATTACK_FAST_S * t;
+                    audio.setHandAttackSeconds(attack);
+                    const { width, height } = getCanvasSize();
+                    addRipple(waveX * width, (1 - pitchY) * height);
+                }
+
+                if (!soundActive) {
+                    soundActive = true;
+                    soundStartMs = Date.now();
+                    audio.start(HAND_TOUCH_ID);
+                }
+
+                const duration = (Date.now() - soundStartMs) / 1000;
+                audio.update(waveX, pitchY, HAND_TOUCH_ID, duration);
+                soundLastUpdateMs = Date.now();
+
+                const { width, height } = getCanvasSize();
+                setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID);
+            } else if (!inPadZone && soundInRange) {
+                const vOut = Math.max(0, Math.max(-(smoothApproachVelMps ?? 0), -approachVelNowMps));
+                const tLinear = clamp(
+                    (vOut - EXIT_VELOCITY_MIN_MPS) / (EXIT_VELOCITY_MAX_MPS - EXIT_VELOCITY_MIN_MPS),
+                    0,
+                    1
+                );
+                const t = Math.pow(tLinear, EXIT_VELOCITY_CURVE);
+                const release = EXIT_RELEASE_SLOW_S * (1 - t) + EXIT_RELEASE_FAST_S * t;
+                soundInRange = false;
+                if (soundActive) {
+                    stopHandVoice(release);
+                }
+            }
+
+            lostSoundFrames = 0;
+        } else {
+            lostSoundFrames += 1;
+        }
+
+        if (lostSoundFrames >= LOST_HAND_FRAMES_TO_RELEASE) {
+            stopHandVoice();
+        }
+
+        // Safety: force release if sound is stuck
+        if (soundActive && !soundInRange) {
+            const stuckDuration = Date.now() - soundStartMs;
+            if (stuckDuration >= STUCK_SOUND_TIMEOUT_MS) {
+                stopHandVoice(PLUCK_RELEASE_S);
+            }
+        }
+
+        if (soundActive && soundLastUpdateMs > 0) {
+            const staleDuration = Date.now() - soundLastUpdateMs;
+            if (staleDuration >= STALE_UPDATE_TIMEOUT_MS) {
+                stopHandVoice(PLUCK_RELEASE_S);
+            }
+        }
+
+        // Update status display
+        const distSuffix = soundDistM !== null && isFinite(soundDistM)
+            ? `d=${(soundDistM * 100).toFixed(0)}cm`
+            : undefined;
+        if (!hasFilter && !hasSound) setStatus('show');
+        else if (hasFilter && hasSound) setStatus('both', distSuffix);
+        else if (hasFilter) setStatus('filter');
+        else setStatus('sound', distSuffix);
+    };
+
     const teardownCamera = () => {
         if (rafId !== null) {
             cancelAnimationFrame(rafId);
             rafId = null;
         }
         stopHandVoice();
+
+        // Clean up native listener
+        if (nativeListenerRemove) {
+            nativeListenerRemove();
+            nativeListenerRemove = null;
+        }
 
         if (video) {
             try { video.pause(); } catch { /* ignore */ }
@@ -323,6 +614,7 @@ export function initHandControls(audio: AudioEngine): void {
         inPluckMode = false;
         inPluckZoneHover = false;
         soundLastUpdateMs = 0;
+        usingNative = false;
     };
 
     const startCamera = async () => {
@@ -657,12 +949,43 @@ export function initHandControls(audio: AudioEngine): void {
         rafId = requestAnimationFrame(() => { void loop(); });
     };
 
+    const enableNative = async (): Promise<boolean> => {
+        const plugin = getTrueDepthPlugin();
+        if (!plugin) return false;
+
+        try {
+            const { available } = await plugin.isAvailable();
+            if (!available) return false;
+
+            // Start native tracking
+            await plugin.start();
+
+            // Listen for hand updates
+            const listener = await plugin.addListener('handUpdate', processNativeUpdate);
+            nativeListenerRemove = listener.remove;
+
+            usingNative = true;
+            return true;
+        } catch {
+            return false;
+        }
+    };
+
     const enable = async () => {
         enabled = true;
         handBtn.disabled = true;
         setStatus('loading');
 
         try {
+            // Try native TrueDepth first (iOS only)
+            const nativeStarted = await enableNative();
+            if (nativeStarted) {
+                handBtn.disabled = false;
+                setStatus('show');
+                return;
+            }
+
+            // Fall back to MediaPipe for web
             await startCamera();
             // Warm up model load in parallel with camera.
             void getHandLandmarker();
@@ -680,6 +1003,15 @@ export function initHandControls(audio: AudioEngine): void {
 
     const disable = () => {
         enabled = false;
+
+        // Stop native plugin if in use
+        if (usingNative) {
+            const plugin = getTrueDepthPlugin();
+            if (plugin) {
+                void plugin.stop();
+            }
+        }
+
         teardownCamera();
         setStatus('off');
     };
