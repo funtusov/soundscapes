@@ -4,5 +4,13 @@ dist/
 .DS_Store
 
 # Capacitor native platforms
-ios/
 android/
+
+# iOS build artifacts (keep source files)
+ios/App/App/public/
+ios/App/App/capacitor.config.json
+ios/App/Pods/
+ios/App/*.xcworkspace/xcuserdata/
+ios/App/*.xcodeproj/xcuserdata/
+ios/App/*.xcodeproj/project.xcworkspace/xcshareddata/
+ios/DerivedData/
