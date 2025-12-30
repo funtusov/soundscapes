@@ -111,6 +111,8 @@ npm run build
 npm run deploy
 ```
 
+After making changes: run `npm run typecheck`, `npm test`, then `npm run deploy`.
+
 ## Browser Support
 
 - **iOS Safari** - Full support including motion/orientation (requires HTTPS)

@@ -16,6 +16,8 @@ npm run deploy       # Build and deploy to Netlify
 npm run typecheck    # Type check without emit
 ```
 
+After making changes: run `npm run typecheck`, `npm test`, then `npm run deploy`.
+
 Live site: https://etherpad-soundscape.netlify.app
 
 ## File Structure

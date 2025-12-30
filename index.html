@@ -151,13 +151,8 @@
 
         <!-- Hand zone calibration -->
         <div class="zones-control" id="zonesControl">
-            <button class="zones-summary" id="zonesSummary">Zones</button>
+            <button class="zones-summary" id="zonesSummary">Zone</button>
             <div class="zones-options" id="zonesOptions">
-                <div class="zones-slider-row">
-                    <span class="zones-slider-label">Pad</span>
-                    <input type="range" id="padZoneSlider" min="20" max="60" value="30" class="zones-slider">
-                    <span class="zones-slider-value" id="padZoneValue">30cm</span>
-                </div>
                 <div class="zones-slider-row">
                     <span class="zones-slider-label">Pointer</span>
                     <input type="range" id="pointerZoneSlider" min="40" max="80" value="60" class="zones-slider">
@@ -169,9 +164,19 @@
                     <span class="zones-slider-value" id="camFovValue">60°</span>
                 </div>
                 <div class="zones-slider-row">
-                    <span class="zones-slider-label">Active</span>
-                    <input type="range" id="activeFovSlider" min="30" max="100" value="70" class="zones-slider">
-                    <span class="zones-slider-value" id="activeFovValue">70%</span>
+                    <span class="zones-slider-label">Pinch</span>
+                    <input type="range" id="pinchCloseSlider" min="15" max="60" value="35" class="zones-slider">
+                    <span class="zones-slider-value" id="pinchCloseValue">0.35</span>
+                </div>
+                <div class="zones-slider-row">
+                    <span class="zones-slider-label">Rearm</span>
+                    <input type="range" id="pinchRearmSlider" min="20" max="80" value="45" class="zones-slider">
+                    <span class="zones-slider-value" id="pinchRearmValue">0.45</span>
+                </div>
+                <div class="zones-slider-row">
+                    <span class="zones-slider-label">Vel</span>
+                    <input type="range" id="pinchVelSlider" min="50" max="350" value="150" class="zones-slider">
+                    <span class="zones-slider-value" id="pinchVelValue">1.5/s</span>
                 </div>
             </div>
         </div>

@@ -6,11 +6,9 @@
  * - On web: Uses MediaPipe Tasks Vision HandLandmarker (loaded lazily on enable).
  * - Two-hand "theremin-ish" mapping:
  *   - Left hand: resonance (height) + filter cutoff (palm orientation)
- *   - Right hand: dual-zone control + reverb (pinch)
- *     - Pad zone (close): continuous pad/swell control
- *     - Pluck zone (mid-range): hover shows target, fast pullback triggers pluck
- *       - Pullback speed determines attack sharpness
- *       - Moving forward into pad zone = pad, not pluck
+ *   - Right hand: pointer zone + pinch-pluck + reverb (pinch openness)
+ *     - Pointer zone: hover shows target, pinch triggers pluck
+ *     - Pinch-sustain: hold pinch to sustain note, release to stop
  */
 
 import type { AudioEngine } from './AudioEngine';
@@ -81,9 +79,6 @@ const HAND_LANDMARKER_MODEL_URL = 'https://storage.googleapis.com/mediapipe-mode
 // Fewer frames on mobile since tracking can be spottier.
 const LOST_HAND_FRAMES_TO_RELEASE = IS_MOBILE ? 4 : 6;
 
-// Safety timeout: force release if sound plays this long without being in pad zone.
-const STUCK_SOUND_TIMEOUT_MS = 500;
-
 // Stale update timeout: force release if sound hasn't been updated in this long.
 const STALE_UPDATE_TIMEOUT_MS = 200;
 
@@ -107,26 +102,19 @@ const RIGHT_HAND_REF_LEN_M = 0.07; // approx wrist → middle MCP
 // - Mobile usage is typically closer, with more hand jitter
 const DEFAULT_CAMERA_FOV_DEG = IS_MOBILE ? 80 : 60;
 
-// Zone thresholds (meters):
-// - Pad zone: continuous "mouse-down" control (sound plays while in-zone)
-// - Pointer zone: max distance where hover pointer is shown (no sound)
-const PAD_ZONE_HYSTERESIS_M = 0.02;
-
-const DEFAULT_PAD_ZONE_ENTER_M = IS_MOBILE ? 0.15 : 0.30;
+// Zone threshold (meters): max distance where hover pointer is shown.
 const DEFAULT_POINTER_ZONE_MAX_M = IS_MOBILE ? 0.50 : 0.60;
 
-// X-Y mapping scale: how much of the camera view maps to the full surface.
-// >1.0 means less hand movement covers full range.
-// Desktop: 70% of view (1/0.7 ≈ 1.43), Mobile: 50% of view (2.0).
-const DEFAULT_XY_SCALE = IS_MOBILE ? 2.0 : 1.43;
-const DEFAULT_ACTIVE_FOV_PCT = Math.round(100 / DEFAULT_XY_SCALE);
-const XY_CENTER_X = 0.5;
-// Desktop Y center shifted down so hands don't need to be raised as much.
-const XY_CENTER_Y = IS_MOBILE ? 0.5 : 0.6;
+// View-to-pad mapping rectangle.
+// - x is in mirrored "view" coordinates (0=left, 1=right).
+// - y is in video coordinates (0=top, 1=bottom).
+// The rectangle defines what part of the camera view maps to the full pad range.
+type ViewMappingRect = { left: number; right: number; top: number; bottom: number };
+const DEFAULT_VIEW_MAPPING_RECT: ViewMappingRect = { left: 0, right: 1, top: 0, bottom: 1 };
 
 // Pluck gesture: quick pinch (thumb+index) while hovering in pointer zone.
 const PLUCK_PINCH_CLOSED_RATIO = 0.35;
-const PLUCK_PINCH_REARM_RATIO = 0.55;
+const PLUCK_PINCH_REARM_RATIO = 0.45;
 const PLUCK_PINCH_CLOSE_MIN_PER_S = 1.5;
 const PLUCK_PINCH_CLOSE_MAX_PER_S = 4.0;
 const PLUCK_PINCH_VELOCITY_CURVE = 0.4;
@@ -135,23 +123,8 @@ const PLUCK_ATTACK_FAST_S = 0.001;
 // Pluck release is short since it's a transient.
 const PLUCK_RELEASE_S = 0.08;
 
-// Entry velocity → attack shaping for pad zone (m/s → seconds).
-// Mobile uses heavier smoothing (lower alpha) to reduce jitter.
+// Distance smoothing for depth estimation.
 const DIST_EMA_ALPHA = IS_MOBILE ? 0.25 : 0.4;
-const PAD_ENTRY_VELOCITY_MIN_MPS = 0.01;
-const PAD_ENTRY_VELOCITY_MAX_MPS = IS_MOBILE ? 0.35 : 0.25;
-const PAD_ENTRY_VELOCITY_CURVE = 0.25;
-const PAD_ENTRY_ATTACK_SLOW_S = 0.04;
-const PAD_ENTRY_ATTACK_FAST_S = 0.0015;
-// Heavier smoothing on mobile to reduce jitter from holding phone.
-const ENTRY_VELOCITY_EMA_ALPHA = IS_MOBILE ? 0.2 : 0.3;
-
-// Exit velocity → release shaping (m/s → seconds).
-const EXIT_VELOCITY_MIN_MPS = 0.01;
-const EXIT_VELOCITY_MAX_MPS = 0.25;
-const EXIT_VELOCITY_CURVE = 0.25;
-const EXIT_RELEASE_SLOW_S = 0.12;
-const EXIT_RELEASE_FAST_S = 0.02;
 
 type Status = 'off' | 'loading' | 'show' | 'filter' | 'sound' | 'both' | 'error';
 
@@ -263,30 +236,34 @@ export function initHandControls(audio: AudioEngine): void {
 
     const zonesSummary = document.getElementById('zonesSummary') as HTMLButtonElement | null;
     const zonesOptions = document.getElementById('zonesOptions') as HTMLElement | null;
-    const padZoneSlider = document.getElementById('padZoneSlider') as HTMLInputElement | null;
-    const padZoneValue = document.getElementById('padZoneValue') as HTMLElement | null;
     const pointerZoneSlider = document.getElementById('pointerZoneSlider') as HTMLInputElement | null;
     const pointerZoneValue = document.getElementById('pointerZoneValue') as HTMLElement | null;
     const camFovSlider = document.getElementById('camFovSlider') as HTMLInputElement | null;
     const camFovValue = document.getElementById('camFovValue') as HTMLElement | null;
-    const activeFovSlider = document.getElementById('activeFovSlider') as HTMLInputElement | null;
-    const activeFovValue = document.getElementById('activeFovValue') as HTMLElement | null;
+    const pinchCloseSlider = document.getElementById('pinchCloseSlider') as HTMLInputElement | null;
+    const pinchCloseValue = document.getElementById('pinchCloseValue') as HTMLElement | null;
+    const pinchRearmSlider = document.getElementById('pinchRearmSlider') as HTMLInputElement | null;
+    const pinchRearmValue = document.getElementById('pinchRearmValue') as HTMLElement | null;
+    const pinchVelSlider = document.getElementById('pinchVelSlider') as HTMLInputElement | null;
+    const pinchVelValue = document.getElementById('pinchVelValue') as HTMLElement | null;
 
     const canUseCamera = !!navigator.mediaDevices?.getUserMedia;
     if (!canUseCamera) {
         handBtn.disabled = true;
         if (handVizBtn) handVizBtn.disabled = true;
         if (zonesSummary) zonesSummary.disabled = true;
-        if (padZoneSlider) padZoneSlider.disabled = true;
         if (pointerZoneSlider) pointerZoneSlider.disabled = true;
         if (camFovSlider) camFovSlider.disabled = true;
-        if (activeFovSlider) activeFovSlider.disabled = true;
+        if (pinchCloseSlider) pinchCloseSlider.disabled = true;
+        if (pinchRearmSlider) pinchRearmSlider.disabled = true;
+        if (pinchVelSlider) pinchVelSlider.disabled = true;
         handVal.textContent = 'n/a';
         return;
     }
 
     let vizEnabled = false;
     let handVizCtx: CanvasRenderingContext2D | null = null;
+    let viewMappingRect: ViewMappingRect = { ...DEFAULT_VIEW_MAPPING_RECT };
 
     type HandVizHand = {
         handedness?: string;
@@ -304,7 +281,6 @@ export function initHandControls(audio: AudioEngine): void {
         filterIndex: number | null;
         soundIndex: number | null;
         sound?: {
-            inPadZone: boolean;
             inPointerZone: boolean;
             isHovering: boolean;
             distM: number | null;
@@ -320,17 +296,59 @@ export function initHandControls(audio: AudioEngine): void {
 
     let vizSnapshot: HandVizSnapshot | null = null;
 
-    // Configurable depth zones (meters).
-    let padZoneEnterM = DEFAULT_PAD_ZONE_ENTER_M;
-    let padZoneExitM = DEFAULT_PAD_ZONE_ENTER_M + PAD_ZONE_HYSTERESIS_M;
+    // Configurable pointer zone (meters).
     let pointerZoneMaxM = DEFAULT_POINTER_ZONE_MAX_M;
 
     // Configurable camera FOV (degrees) for distance estimation.
     let cameraFovDeg = DEFAULT_CAMERA_FOV_DEG;
 
-    // Configurable "active FOV" (how much of camera view maps to full X/Y range).
-    let activeFovPct = DEFAULT_ACTIVE_FOV_PCT;
-    let xyScale = DEFAULT_XY_SCALE;
+    // Configurable pluck/pinch sensitivity.
+    let pluckPinchClosedRatio = PLUCK_PINCH_CLOSED_RATIO;
+    let pluckPinchRearmRatio = PLUCK_PINCH_REARM_RATIO;
+    let pluckPinchCloseMinPerS = PLUCK_PINCH_CLOSE_MIN_PER_S;
+
+    const MIN_VIEW_MAPPING_SPAN = 0.1;
+    const clampViewMappingRect = (rect: ViewMappingRect): ViewMappingRect => {
+        let left = clamp(rect.left, 0, 1);
+        let right = clamp(rect.right, 0, 1);
+        let top = clamp(rect.top, 0, 1);
+        let bottom = clamp(rect.bottom, 0, 1);
+
+        if (left > right) [left, right] = [right, left];
+        if (top > bottom) [top, bottom] = [bottom, top];
+
+        const spanX = Math.max(MIN_VIEW_MAPPING_SPAN, right - left);
+        const spanY = Math.max(MIN_VIEW_MAPPING_SPAN, bottom - top);
+
+        if (right - left < MIN_VIEW_MAPPING_SPAN) {
+            const mid = (left + right) / 2;
+            left = clamp(mid - spanX / 2, 0, 1 - spanX);
+            right = left + spanX;
+        }
+
+        if (bottom - top < MIN_VIEW_MAPPING_SPAN) {
+            const mid = (top + bottom) / 2;
+            top = clamp(mid - spanY / 2, 0, 1 - spanY);
+            bottom = top + spanY;
+        }
+
+        return { left, right, top, bottom };
+    };
+
+    const setViewMappingRect = (rect: ViewMappingRect) => {
+        viewMappingRect = clampViewMappingRect(rect);
+        if (vizEnabled) {
+            drawHandViz();
+        }
+    };
+
+    const mapViewToPad = (viewX: number, viewY: number): { waveX: number; pitchY: number } => {
+        const spanX = Math.max(1e-6, viewMappingRect.right - viewMappingRect.left);
+        const spanY = Math.max(1e-6, viewMappingRect.bottom - viewMappingRect.top);
+        const xNorm = clamp((viewX - viewMappingRect.left) / spanX, 0, 1);
+        const yNorm = clamp((viewY - viewMappingRect.top) / spanY, 0, 1);
+        return { waveX: xNorm, pitchY: clamp(1 - yNorm, 0, 1) };
+    };
 
     let enabled = false;
     let stream: MediaStream | null = null;
@@ -339,14 +357,10 @@ export function initHandControls(audio: AudioEngine): void {
 
     // Tracking state
     let soundActive = false;
-    let soundInRange = false;  // In pad zone (continuous control)
     let soundStartMs = 0;
     let soundLastUpdateMs = 0;  // Last time audio.update was called
     let lostSoundFrames = 0;
     let smoothDistM: number | null = null;
-    let soundPrevDistM: number | null = null;
-    let soundPrevDistMs: number | null = null;
-    let smoothApproachVelMps: number | null = null;
 
     // Pluck gesture state.
     let pluckArmed = true;  // Ready to trigger next pluck (re-arms when pinch opens)
@@ -367,6 +381,20 @@ export function initHandControls(audio: AudioEngine): void {
     // Native TrueDepth tracking state
     let usingNative = false;
     let nativeListenerRemove: (() => void) | null = null;
+
+    type VizLayout = { dpr: number; offsetX: number; offsetY: number; drawW: number; drawH: number };
+    let vizLayout: VizLayout | null = null;
+
+    type MappingDragMode = 'left' | 'right' | 'top' | 'bottom' | 'move';
+    type MappingDragState = {
+        pointerId: number;
+        mode: MappingDragMode;
+        startViewX: number;
+        startViewY: number;
+        startRect: ViewMappingRect;
+    };
+    let mappingDrag: MappingDragState | null = null;
+    let mappingHoverMode: MappingDragMode | null = null;
 
     const setVizEnabled = (on: boolean) => {
         vizEnabled = on;
@@ -462,21 +490,61 @@ export function initHandControls(audio: AudioEngine): void {
         const mapX = (x: number) => offsetX + (1 - x) * drawW;
         const mapY = (y: number) => offsetY + y * drawH;
 
-        // Draw the "active" mapping region (where XY scaling won't clamp).
-        const activeX0 = XY_CENTER_X * (1 - 1 / xyScale);
-        const activeX1 = XY_CENTER_X + (1 - XY_CENTER_X) / xyScale;
-        const activeY0 = XY_CENTER_Y * (1 - 1 / xyScale);
-        const activeY1 = XY_CENTER_Y + (1 - XY_CENTER_Y) / xyScale;
-        const rx0 = Math.min(mapX(activeX0), mapX(activeX1));
-        const rx1 = Math.max(mapX(activeX0), mapX(activeX1));
-        const ry0 = Math.min(mapY(activeY0), mapY(activeY1));
-        const ry1 = Math.max(mapY(activeY0), mapY(activeY1));
+        vizLayout = { dpr, offsetX, offsetY, drawW, drawH };
+
+        // Draw the mapping region (what maps to the full pad range).
+        const rx0 = offsetX + viewMappingRect.left * drawW;
+        const rx1 = offsetX + viewMappingRect.right * drawW;
+        const ry0 = offsetY + viewMappingRect.top * drawH;
+        const ry1 = offsetY + viewMappingRect.bottom * drawH;
+        const hoverMode = mappingDrag?.mode ?? mappingHoverMode;
 
         ctx.save();
         ctx.strokeStyle = 'rgba(0, 160, 255, 0.65)';
         ctx.lineWidth = 2 * dpr;
         ctx.setLineDash([6 * dpr, 6 * dpr]);
         ctx.strokeRect(rx0, ry0, rx1 - rx0, ry1 - ry0);
+
+        // Hover/drag highlight: show active edge as solid.
+        if (hoverMode) {
+            ctx.setLineDash([]);
+            ctx.strokeStyle = 'rgba(0, 160, 255, 0.95)';
+            ctx.lineWidth = 3 * dpr;
+            ctx.beginPath();
+            if (hoverMode === 'move') {
+                ctx.rect(rx0, ry0, rx1 - rx0, ry1 - ry0);
+            } else if (hoverMode === 'left') {
+                ctx.moveTo(rx0, ry0);
+                ctx.lineTo(rx0, ry1);
+            } else if (hoverMode === 'right') {
+                ctx.moveTo(rx1, ry0);
+                ctx.lineTo(rx1, ry1);
+            } else if (hoverMode === 'top') {
+                ctx.moveTo(rx0, ry0);
+                ctx.lineTo(rx1, ry0);
+            } else if (hoverMode === 'bottom') {
+                ctx.moveTo(rx0, ry1);
+                ctx.lineTo(rx1, ry1);
+            }
+            ctx.stroke();
+        }
+
+        // Drag handles (midpoints).
+        const handleR = 4 * dpr;
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'rgba(0, 160, 255, 0.9)';
+        const midX = (rx0 + rx1) / 2;
+        const midY = (ry0 + ry1) / 2;
+        for (const [hx, hy] of [
+            [rx0, midY],
+            [rx1, midY],
+            [midX, ry0],
+            [midX, ry1],
+        ] as const) {
+            ctx.beginPath();
+            ctx.arc(hx, hy, handleR, 0, Math.PI * 2);
+            ctx.fill();
+        }
         ctx.restore();
 
         // Draw hands (all detected + highlight controlling hands).
@@ -560,11 +628,9 @@ export function initHandControls(audio: AudioEngine): void {
 
                 if (controlPoint) {
                     const zone = snapshot.sound;
-                    const zoneColor = zone?.inPadZone
-                        ? 'rgba(0, 255, 120, 0.95)'
-                        : zone?.inPointerZone
-                            ? 'rgba(255, 220, 0, 0.95)'
-                            : 'rgba(255, 255, 255, 0.5)';
+                    const zoneColor = zone?.inPointerZone
+                        ? 'rgba(255, 220, 0, 0.95)'
+                        : 'rgba(255, 255, 255, 0.5)';
 
                     ctx.save();
                     ctx.strokeStyle = zoneColor;
@@ -579,13 +645,15 @@ export function initHandControls(audio: AudioEngine): void {
                     const waveX = zone?.waveX;
                     const pitchY = zone?.pitchY;
                     if (waveX !== null && waveX !== undefined && pitchY !== null && pitchY !== undefined) {
-                        const usedX = clamp(1 - waveX, 0, 1);
-                        const usedY = clamp(1 - pitchY, 0, 1);
+                        const spanX = Math.max(1e-6, viewMappingRect.right - viewMappingRect.left);
+                        const spanY = Math.max(1e-6, viewMappingRect.bottom - viewMappingRect.top);
+                        const usedViewX = clamp(viewMappingRect.left + waveX * spanX, 0, 1);
+                        const usedViewY = clamp(viewMappingRect.top + (1 - pitchY) * spanY, 0, 1);
                         ctx.save();
                         ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
                         ctx.lineWidth = 2 * dpr;
-                        const px = mapX(usedX);
-                        const py = mapY(usedY);
+                        const px = offsetX + usedViewX * drawW;
+                        const py = offsetY + usedViewY * drawH;
                         const s = 8 * dpr;
                         ctx.beginPath();
                         ctx.moveTo(px - s, py);
@@ -662,11 +730,9 @@ export function initHandControls(audio: AudioEngine): void {
                 : 'res --';
 
             const modeLabel = usingNative ? 'native' : 'web';
-            const zoneLabel = snapshot?.sound?.inPadZone
-                ? 'PAD'
-                : snapshot?.sound?.inPointerZone
-                    ? (snapshot.sound.isHovering ? 'PTR*' : 'PTR')
-                    : '--';
+            const zoneLabel = snapshot?.sound?.inPointerZone
+                ? (snapshot.sound.isHovering ? 'PTR*' : 'PTR')
+                : '--';
             const distText = snapshot?.sound?.distM !== null && snapshot?.sound?.distM !== undefined
                 ? `${Math.round(snapshot.sound.distM * 100)}cm`
                 : '--';
@@ -674,28 +740,27 @@ export function initHandControls(audio: AudioEngine): void {
                 ? `pinch ${snapshot.sound.pinchRatio.toFixed(2)}`
                 : 'pinch --';
 
-            const padText = `pad≤${Math.round(padZoneEnterM * 100)}cm`;
             const ptrText = `ptr≤${Math.round(pointerZoneMaxM * 100)}cm`;
             const camFovText = `${Math.round(cameraFovDeg)}°`;
-            const activeFovText = `${Math.round(activeFovPct)}%`;
+            const mapW = Math.round((viewMappingRect.right - viewMappingRect.left) * 100);
+            const mapH = Math.round((viewMappingRect.bottom - viewMappingRect.top) * 100);
+            const mapText = `map ${mapW}×${mapH}%`;
+            const xyText = snapshot?.sound?.waveX !== null && snapshot?.sound?.waveX !== undefined
+                && snapshot?.sound?.pitchY !== null && snapshot?.sound?.pitchY !== undefined
+                ? `xy ${snapshot.sound.waveX.toFixed(2)},${snapshot.sound.pitchY.toFixed(2)}`
+                : 'xy --';
 
-            handVizLegend.innerHTML = `<span>${modeLabel} · hands ${handsCount} · F ${filterName} · S ${soundName} · ${palmText} · ${resText}</span><span>${soundActive ? 'on' : 'off'} · ${zoneLabel} · ${distText} · ${padText} · ${ptrText} · cam ${camFovText} · active ${activeFovText} · ${pinchText}</span>`;
+            handVizLegend.innerHTML = `<span>${modeLabel} · hands ${handsCount} · F ${filterName} · S ${soundName} · ${palmText} · ${resText}</span><span>${soundActive ? 'on' : 'off'} · ${zoneLabel} · ${distText} · ${ptrText} · cam ${camFovText} · ${mapText} · ${xyText} · ${pinchText}</span>`;
         }
     };
 
-    const setZoneSettings = (padCm: number, pointerCm: number) => {
-        const padClamped = clamp(padCm, 20, 60);
+    const setZoneSettings = (pointerCm: number) => {
         const pointerClamped = clamp(pointerCm, 40, 80);
-
-        padZoneEnterM = padClamped / 100;
-        padZoneExitM = padZoneEnterM + PAD_ZONE_HYSTERESIS_M;
         pointerZoneMaxM = pointerClamped / 100;
 
-        if (padZoneSlider) padZoneSlider.value = String(Math.round(padClamped));
         if (pointerZoneSlider) pointerZoneSlider.value = String(Math.round(pointerClamped));
-        if (padZoneValue) padZoneValue.textContent = `${Math.round(padClamped)}cm`;
         if (pointerZoneValue) pointerZoneValue.textContent = `${Math.round(pointerClamped)}cm`;
-        if (zonesSummary) zonesSummary.textContent = `Zones ${Math.round(padClamped)}/${Math.round(pointerClamped)}`;
+        if (zonesSummary) zonesSummary.textContent = `Zone ${Math.round(pointerClamped)}cm`;
 
         if (vizEnabled) {
             drawHandViz();
@@ -714,21 +779,240 @@ export function initHandControls(audio: AudioEngine): void {
         }
     };
 
-    const setActiveFov = (pct: number) => {
-        const pctClamped = clamp(pct, 30, 100);
-        activeFovPct = pctClamped;
-        xyScale = 100 / pctClamped;
+    const MIN_PLUCK_REARM_GAP = 0.05;
 
-        if (activeFovSlider) activeFovSlider.value = String(Math.round(pctClamped));
-        if (activeFovValue) activeFovValue.textContent = `${Math.round(pctClamped)}%`;
+    const setPluckPinchClosedRatio = (ratio: number) => {
+        const ratioClamped = clamp(ratio, 0.15, 0.60);
+        pluckPinchClosedRatio = ratioClamped;
+
+        // Keep rearm threshold above close threshold for stable plucks.
+        if (pluckPinchRearmRatio < pluckPinchClosedRatio + MIN_PLUCK_REARM_GAP) {
+            pluckPinchRearmRatio = clamp(pluckPinchClosedRatio + MIN_PLUCK_REARM_GAP, 0.20, 0.80);
+        }
+
+        if (pinchCloseSlider) pinchCloseSlider.value = String(Math.round(pluckPinchClosedRatio * 100));
+        if (pinchCloseValue) pinchCloseValue.textContent = pluckPinchClosedRatio.toFixed(2);
+
+        if (pinchRearmSlider) pinchRearmSlider.value = String(Math.round(pluckPinchRearmRatio * 100));
+        if (pinchRearmValue) pinchRearmValue.textContent = pluckPinchRearmRatio.toFixed(2);
 
         if (vizEnabled) {
             drawHandViz();
         }
     };
 
+    const setPluckPinchRearmRatio = (ratio: number) => {
+        const min = pluckPinchClosedRatio + MIN_PLUCK_REARM_GAP;
+        const ratioClamped = clamp(ratio, min, 0.80);
+        pluckPinchRearmRatio = ratioClamped;
+
+        if (pinchRearmSlider) pinchRearmSlider.value = String(Math.round(pluckPinchRearmRatio * 100));
+        if (pinchRearmValue) pinchRearmValue.textContent = pluckPinchRearmRatio.toFixed(2);
+
+        if (vizEnabled) {
+            drawHandViz();
+        }
+    };
+
+    const setPluckPinchCloseMinPerS = (velPerS: number) => {
+        const max = Math.max(PLUCK_PINCH_CLOSE_MIN_PER_S + 0.01, PLUCK_PINCH_CLOSE_MAX_PER_S - 0.1);
+        const velClamped = clamp(velPerS, 0.5, max);
+        pluckPinchCloseMinPerS = velClamped;
+
+        if (pinchVelSlider) pinchVelSlider.value = String(Math.round(pluckPinchCloseMinPerS * 100));
+        if (pinchVelValue) pinchVelValue.textContent = `${pluckPinchCloseMinPerS.toFixed(1)}/s`;
+
+        if (vizEnabled) {
+            drawHandViz();
+        }
+    };
+
+    const initMappingDrag = () => {
+        if (!handVizCanvas) return;
+
+        const getViewPos = (e: PointerEvent): { viewX: number; viewY: number; cx: number; cy: number } | null => {
+            const layout = vizLayout;
+            if (!layout) return null;
+
+            const rect = handVizCanvas.getBoundingClientRect();
+            const cx = (e.clientX - rect.left) * layout.dpr;
+            const cy = (e.clientY - rect.top) * layout.dpr;
+
+            const viewX = clamp((cx - layout.offsetX) / layout.drawW, 0, 1);
+            const viewY = clamp((cy - layout.offsetY) / layout.drawH, 0, 1);
+            return { viewX, viewY, cx, cy };
+        };
+
+        const hitTest = (e: PointerEvent): MappingDragMode | null => {
+            const layout = vizLayout;
+            const pos = getViewPos(e);
+            if (!layout || !pos) return null;
+
+            const x0 = layout.offsetX + viewMappingRect.left * layout.drawW;
+            const x1 = layout.offsetX + viewMappingRect.right * layout.drawW;
+            const y0 = layout.offsetY + viewMappingRect.top * layout.drawH;
+            const y1 = layout.offsetY + viewMappingRect.bottom * layout.drawH;
+
+            const withinX = pos.cx >= Math.min(x0, x1) && pos.cx <= Math.max(x0, x1);
+            const withinY = pos.cy >= Math.min(y0, y1) && pos.cy <= Math.max(y0, y1);
+            const inside = withinX && withinY;
+
+            const hitPx = 10 * layout.dpr;
+            const candidates: Array<{ mode: Exclude<MappingDragMode, 'move'>; dist: number }> = [];
+
+            if (pos.cy >= y0 - hitPx && pos.cy <= y1 + hitPx) {
+                candidates.push({ mode: 'left', dist: Math.abs(pos.cx - x0) });
+                candidates.push({ mode: 'right', dist: Math.abs(pos.cx - x1) });
+            }
+            if (pos.cx >= x0 - hitPx && pos.cx <= x1 + hitPx) {
+                candidates.push({ mode: 'top', dist: Math.abs(pos.cy - y0) });
+                candidates.push({ mode: 'bottom', dist: Math.abs(pos.cy - y1) });
+            }
+
+            const best = candidates
+                .filter(c => c.dist <= hitPx)
+                .sort((a, b) => a.dist - b.dist)[0];
+
+            if (best) return best.mode;
+            if (inside) return 'move';
+            return null;
+        };
+
+        const setCursorForMode = (mode: MappingDragMode | null) => {
+            if (!handVizCanvas) return;
+            if (!vizEnabled) {
+                handVizCanvas.style.cursor = '';
+                return;
+            }
+            const cursor = mappingDrag
+                ? 'grabbing'
+                : mode
+                    ? 'pointer'
+                    : '';
+            handVizCanvas.style.cursor = cursor;
+        };
+
+        const onPointerDown = (e: PointerEvent) => {
+            if (!vizEnabled) return;
+
+            const mode = hitTest(e);
+            const pos = getViewPos(e);
+            if (!mode || !pos) return;
+
+            e.stopPropagation();
+            e.preventDefault();
+
+            mappingDrag = {
+                pointerId: e.pointerId,
+                mode,
+                startViewX: pos.viewX,
+                startViewY: pos.viewY,
+                startRect: viewMappingRect,
+            };
+
+            try { handVizCanvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+            mappingHoverMode = mode;
+            setCursorForMode(mode);
+        };
+
+        const onPointerMove = (e: PointerEvent) => {
+            if (!vizEnabled) return;
+
+            if (!mappingDrag) {
+                const mode = hitTest(e);
+                if (mode !== mappingHoverMode) {
+                    mappingHoverMode = mode;
+                    drawHandViz();
+                }
+                setCursorForMode(mode);
+                return;
+            }
+            if (e.pointerId !== mappingDrag.pointerId) return;
+
+            const pos = getViewPos(e);
+            if (!pos) return;
+
+            e.stopPropagation();
+            e.preventDefault();
+
+            const minSpan = MIN_VIEW_MAPPING_SPAN;
+            const start = mappingDrag.startRect;
+            const dx = pos.viewX - mappingDrag.startViewX;
+            const dy = pos.viewY - mappingDrag.startViewY;
+
+            let next: ViewMappingRect = start;
+            switch (mappingDrag.mode) {
+                case 'left': {
+                    const left = clamp(pos.viewX, 0, start.right - minSpan);
+                    next = { ...start, left };
+                    break;
+                }
+                case 'right': {
+                    const right = clamp(pos.viewX, start.left + minSpan, 1);
+                    next = { ...start, right };
+                    break;
+                }
+                case 'top': {
+                    const top = clamp(pos.viewY, 0, start.bottom - minSpan);
+                    next = { ...start, top };
+                    break;
+                }
+                case 'bottom': {
+                    const bottom = clamp(pos.viewY, start.top + minSpan, 1);
+                    next = { ...start, bottom };
+                    break;
+                }
+                case 'move': {
+                    const w = start.right - start.left;
+                    const h = start.bottom - start.top;
+                    let left = start.left + dx;
+                    let top = start.top + dy;
+                    left = clamp(left, 0, 1 - w);
+                    top = clamp(top, 0, 1 - h);
+                    next = { left, right: left + w, top, bottom: top + h };
+                    break;
+                }
+            }
+
+            setViewMappingRect(next);
+        };
+
+        const onPointerUp = (e: PointerEvent) => {
+            if (!mappingDrag) return;
+            if (e.pointerId !== mappingDrag.pointerId) return;
+            e.stopPropagation();
+            e.preventDefault();
+            mappingDrag = null;
+            const mode = hitTest(e);
+            mappingHoverMode = mode;
+            setCursorForMode(mode);
+            drawHandViz();
+        };
+
+        handVizCanvas.addEventListener('pointerdown', onPointerDown, { passive: false });
+        handVizCanvas.addEventListener('pointermove', onPointerMove, { passive: false });
+        handVizCanvas.addEventListener('pointerup', onPointerUp, { passive: false });
+        handVizCanvas.addEventListener('pointercancel', onPointerUp, { passive: false });
+        handVizCanvas.addEventListener('pointerleave', () => {
+            if (!vizEnabled) return;
+            if (mappingDrag) return;
+            if (mappingHoverMode !== null) {
+                mappingHoverMode = null;
+                setCursorForMode(null);
+                drawHandViz();
+            }
+        });
+
+        handVizCanvas.addEventListener('dblclick', (e) => {
+            if (!vizEnabled) return;
+            e.stopPropagation();
+            e.preventDefault();
+            setViewMappingRect({ ...DEFAULT_VIEW_MAPPING_RECT });
+        });
+    };
+
     const initZoneControls = () => {
-        if (!zonesSummary || !zonesOptions || !padZoneSlider || !pointerZoneSlider) return;
+        if (!zonesSummary || !zonesOptions || !pointerZoneSlider) return;
 
         const positionZones = () => {
             const rect = zonesSummary.getBoundingClientRect();
@@ -755,14 +1039,25 @@ export function initHandControls(audio: AudioEngine): void {
             zonesSummary.classList.add('active');
         };
 
-        const toggleHandler = createTouchSafeHandler(toggleZones);
-        zonesSummary.addEventListener('click', toggleHandler);
-        zonesSummary.addEventListener('touchend', toggleHandler);
+        // Prevent clicks from propagating to canvas (which would trigger sound)
+        const stopAll = (e: Event) => {
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+        };
 
-        // Prevent clicks on options panel from propagating to canvas
-        zonesOptions.addEventListener('click', (e) => e.stopPropagation());
-        zonesOptions.addEventListener('touchstart', (e) => e.stopPropagation());
-        zonesOptions.addEventListener('touchend', (e) => e.stopPropagation());
+        const toggleHandler = createTouchSafeHandler(toggleZones);
+        zonesSummary.addEventListener('click', (e) => { stopAll(e); toggleHandler(e); });
+        zonesSummary.addEventListener('touchend', (e) => { stopAll(e); toggleHandler(e); });
+        zonesSummary.addEventListener('pointerdown', stopAll);
+        zonesSummary.addEventListener('mousedown', stopAll);
+
+        zonesOptions.addEventListener('click', stopAll);
+        zonesOptions.addEventListener('touchstart', stopAll);
+        zonesOptions.addEventListener('touchend', stopAll);
+        zonesOptions.addEventListener('pointerdown', stopAll);
+        zonesOptions.addEventListener('pointerup', stopAll);
+        zonesOptions.addEventListener('mousedown', stopAll);
+        zonesOptions.addEventListener('mouseup', stopAll);
 
         // Close options when clicking elsewhere
         document.addEventListener('click', (e) => {
@@ -778,12 +1073,8 @@ export function initHandControls(audio: AudioEngine): void {
             }
         });
 
-        padZoneSlider.addEventListener('input', () => {
-            setZoneSettings(parseInt(padZoneSlider.value, 10), parseInt(pointerZoneSlider.value, 10));
-        });
-
         pointerZoneSlider.addEventListener('input', () => {
-            setZoneSettings(parseInt(padZoneSlider.value, 10), parseInt(pointerZoneSlider.value, 10));
+            setZoneSettings(parseInt(pointerZoneSlider.value, 10));
         });
 
         if (camFovSlider) {
@@ -792,19 +1083,34 @@ export function initHandControls(audio: AudioEngine): void {
             });
         }
 
-        if (activeFovSlider) {
-            activeFovSlider.addEventListener('input', () => {
-                setActiveFov(parseInt(activeFovSlider.value, 10));
+        if (pinchCloseSlider) {
+            pinchCloseSlider.addEventListener('input', () => {
+                setPluckPinchClosedRatio(parseInt(pinchCloseSlider.value, 10) / 100);
+            });
+        }
+
+        if (pinchRearmSlider) {
+            pinchRearmSlider.addEventListener('input', () => {
+                setPluckPinchRearmRatio(parseInt(pinchRearmSlider.value, 10) / 100);
+            });
+        }
+
+        if (pinchVelSlider) {
+            pinchVelSlider.addEventListener('input', () => {
+                setPluckPinchCloseMinPerS(parseInt(pinchVelSlider.value, 10) / 100);
             });
         }
 
         // Initialize from defaults (clamped to slider min/max).
-        setZoneSettings(Math.round(DEFAULT_PAD_ZONE_ENTER_M * 100), Math.round(DEFAULT_POINTER_ZONE_MAX_M * 100));
+        setZoneSettings(Math.round(DEFAULT_POINTER_ZONE_MAX_M * 100));
         setCameraFov(DEFAULT_CAMERA_FOV_DEG);
-        setActiveFov(DEFAULT_ACTIVE_FOV_PCT);
+        setPluckPinchClosedRatio(PLUCK_PINCH_CLOSED_RATIO);
+        setPluckPinchRearmRatio(PLUCK_PINCH_REARM_RATIO);
+        setPluckPinchCloseMinPerS(PLUCK_PINCH_CLOSE_MIN_PER_S);
     };
 
     initZoneControls();
+    initMappingDrag();
 
     const stopHandVoice = (releaseSeconds?: number) => {
         if (!soundActive) return;
@@ -814,7 +1120,6 @@ export function initHandControls(audio: AudioEngine): void {
         const duration = (Date.now() - soundStartMs) / 1000;
         audio.stop(HAND_TOUCH_ID, duration, { applyReleaseEnvelope: false });
         soundActive = false;
-        soundInRange = false;
         inPluckMode = false;
         inPointerHover = false;
         removeCursor(HAND_TOUCH_ID);
@@ -829,7 +1134,6 @@ export function initHandControls(audio: AudioEngine): void {
         const hands = data.hands;
 
         // Debug snapshot scalars
-        let inPadZone = false;
         let inPointerZone = false;
         let isHovering = false;
         let gateDistM: number | null = null;
@@ -871,7 +1175,7 @@ export function initHandControls(audio: AudioEngine): void {
             }
         }
 
-        // Right hand: zone control + reverb
+        // Right hand: pointer zone + pinch pluck + reverb
         if (soundHand) {
             const middleMcpX = soundHand.middleMcpX;
             const middleMcpY = soundHand.middleMcpY;
@@ -879,11 +1183,9 @@ export function initHandControls(audio: AudioEngine): void {
             smoothSoundX = ema(smoothSoundX, middleMcpX, POS_EMA_ALPHA);
             smoothSoundY = ema(smoothSoundY, middleMcpY, POS_EMA_ALPHA);
 
-            // Apply X-Y scaling and offset (mirror X for selfie view)
-            const scaledX = XY_CENTER_X + ((smoothSoundX ?? middleMcpX) - XY_CENTER_X) * xyScale;
-            const scaledY = XY_CENTER_Y + ((smoothSoundY ?? middleMcpY) - XY_CENTER_Y) * xyScale;
-            const waveX = clamp(1 - scaledX, 0, 1);
-            const pitchY = clamp(1 - scaledY, 0, 1);
+            const viewX = 1 - (smoothSoundX ?? middleMcpX);
+            const viewY = smoothSoundY ?? middleMcpY;
+            const { waveX, pitchY } = mapViewToPad(viewX, viewY);
             soundWaveX = waveX;
             soundPitchY = pitchY;
 
@@ -895,27 +1197,15 @@ export function initHandControls(audio: AudioEngine): void {
             const gateDist = smoothDistM ?? soundDistM;
             gateDistM = gateDist;
 
-            // Determine zones (depth in meters)
-            inPadZone = gateDist === null
-                ? soundInRange
-                : (soundInRange ? gateDist <= padZoneExitM : gateDist <= padZoneEnterM);
+            // Determine pointer zone (depth in meters)
             inPointerZone = gateDist === null
                 ? true
                 : gateDist <= pointerZoneMaxM;
 
-            // Estimate approach speed from depth delta
-            let approachVelNowMps = smoothApproachVelMps ?? 0;
-            if (soundDistM !== null) {
-                if (soundPrevDistM !== null && soundPrevDistMs !== null) {
-                    const dt = (nowMs - soundPrevDistMs) / 1000;
-                    if (dt > 0.001) {
-                        const approachVel = (soundPrevDistM - soundDistM) / dt;
-                        approachVelNowMps = approachVel;
-                        smoothApproachVelMps = ema(smoothApproachVelMps, approachVel, ENTRY_VELOCITY_EMA_ALPHA);
-                    }
-                }
-                soundPrevDistM = soundDistM;
-                soundPrevDistMs = nowMs;
+            // In View mode, always show the mapped cursor on the pad for calibration.
+            if (vizEnabled && !soundActive) {
+                const { width, height } = getCanvasSize();
+                setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID, true);
             }
 
             // Pinch controls reverb (native provides pinchRatio directly)
@@ -956,11 +1246,11 @@ export function initHandControls(audio: AudioEngine): void {
             pinchPrevMs = nowMs;
 
             // Re-arm pluck when pinch opens.
-            if (!pluckArmed && soundHand.pinchRatio >= PLUCK_PINCH_REARM_RATIO) {
+            if (!pluckArmed && soundHand.pinchRatio >= pluckPinchRearmRatio) {
                 pluckArmed = true;
             }
 
-            const wantsHover = inPointerZone && !inPadZone && !soundActive;
+            const wantsHover = inPointerZone && !soundActive;
             if (wantsHover) {
                 isHovering = true;
                 if (!inPointerHover) {
@@ -971,8 +1261,8 @@ export function initHandControls(audio: AudioEngine): void {
                 setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID, true);
 
                 const wantsPluck = pluckArmed
-                    && soundHand.pinchRatio <= PLUCK_PINCH_CLOSED_RATIO
-                    && pinchCloseVelPerS >= PLUCK_PINCH_CLOSE_MIN_PER_S;
+                    && soundHand.pinchRatio <= pluckPinchClosedRatio
+                    && pinchCloseVelPerS >= pluckPinchCloseMinPerS;
 
                 if (wantsPluck) {
                     pluckArmed = false;
@@ -982,7 +1272,7 @@ export function initHandControls(audio: AudioEngine): void {
                     pinchAttackFlashUntilMs = nowMs + 200;
 
                     const tLinear = clamp(
-                        (pinchCloseVelPerS - PLUCK_PINCH_CLOSE_MIN_PER_S) / (PLUCK_PINCH_CLOSE_MAX_PER_S - PLUCK_PINCH_CLOSE_MIN_PER_S),
+                        (pinchCloseVelPerS - pluckPinchCloseMinPerS) / (PLUCK_PINCH_CLOSE_MAX_PER_S - pluckPinchCloseMinPerS),
                         0,
                         1
                     );
@@ -1002,14 +1292,14 @@ export function initHandControls(audio: AudioEngine): void {
                 }
             } else if (inPointerHover && !wantsHover) {
                 inPointerHover = false;
-                if (!soundActive) {
+                if (!soundActive && !vizEnabled) {
                     removeCursor(HAND_TOUCH_ID);
                 }
             }
 
             // Pinch-sustain pluck: sustain while pinched, release when open (or leaving pointer zone).
-            if (inPluckMode && soundActive && !inPadZone) {
-                const pinchOpen = soundHand.pinchRatio >= PLUCK_PINCH_REARM_RATIO;
+            if (inPluckMode && soundActive) {
+                const pinchOpen = soundHand.pinchRatio >= pluckPinchRearmRatio;
                 const stillInPointerZone = inPointerZone;
 
                 if (pinchOpen || !stillInPointerZone) {
@@ -1031,61 +1321,6 @@ export function initHandControls(audio: AudioEngine): void {
                 }
             }
 
-            // Handle pad zone: continuous control
-            if (inPadZone) {
-                inPluckMode = false;
-                inPointerHover = false;
-
-                if (!soundInRange) {
-                    soundInRange = true;
-                    const v = Math.max(0, Math.max(smoothApproachVelMps ?? 0, approachVelNowMps));
-                    const tLinear = clamp(
-                        (v - PAD_ENTRY_VELOCITY_MIN_MPS) / (PAD_ENTRY_VELOCITY_MAX_MPS - PAD_ENTRY_VELOCITY_MIN_MPS),
-                        0,
-                        1
-                    );
-                    const t = Math.pow(tLinear, PAD_ENTRY_VELOCITY_CURVE);
-                    const attack = PAD_ENTRY_ATTACK_SLOW_S * (1 - t) + PAD_ENTRY_ATTACK_FAST_S * t;
-                    audio.setHandAttackSeconds(attack);
-                    const { width, height } = getCanvasSize();
-                    addRipple(waveX * width, (1 - pitchY) * height);
-                }
-
-                if (!soundActive) {
-                    soundActive = true;
-                    soundStartMs = Date.now();
-                    audio.start(HAND_TOUCH_ID);
-                }
-
-                const duration = (Date.now() - soundStartMs) / 1000;
-                audio.update(waveX, pitchY, HAND_TOUCH_ID, duration);
-                soundLastUpdateMs = Date.now();
-
-                const { width, height } = getCanvasSize();
-                setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID);
-            } else if (!inPadZone && soundInRange) {
-                const vOut = Math.max(0, Math.max(-(smoothApproachVelMps ?? 0), -approachVelNowMps));
-                const tLinear = clamp(
-                    (vOut - EXIT_VELOCITY_MIN_MPS) / (EXIT_VELOCITY_MAX_MPS - EXIT_VELOCITY_MIN_MPS),
-                    0,
-                    1
-                );
-                const t = Math.pow(tLinear, EXIT_VELOCITY_CURVE);
-                const release = EXIT_RELEASE_SLOW_S * (1 - t) + EXIT_RELEASE_FAST_S * t;
-                soundInRange = false;
-                if (soundActive) {
-                    stopHandVoice(release);
-                }
-
-                // If we're still within pointer zone, fall back to hover pointer.
-                if (inPointerZone && !soundActive) {
-                    isHovering = true;
-                    inPointerHover = true;
-                    const { width, height } = getCanvasSize();
-                    setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID, true);
-                }
-            }
-
             lostSoundFrames = 0;
         } else {
             lostSoundFrames += 1;
@@ -1095,14 +1330,7 @@ export function initHandControls(audio: AudioEngine): void {
             stopHandVoice();
         }
 
-        // Safety: force release if sound is stuck (not in pad zone and not in pinch-sustain pluck).
-        if (soundActive && !soundInRange && !inPluckMode) {
-            const stuckDuration = Date.now() - soundStartMs;
-            if (stuckDuration >= STUCK_SOUND_TIMEOUT_MS) {
-                stopHandVoice(PLUCK_RELEASE_S);
-            }
-        }
-
+        // Safety: force release if sound hasn't been updated recently (stale tracking).
         if (soundActive && soundLastUpdateMs > 0) {
             const staleDuration = Date.now() - soundLastUpdateMs;
             if (staleDuration >= STALE_UPDATE_TIMEOUT_MS) {
@@ -1136,7 +1364,6 @@ export function initHandControls(audio: AudioEngine): void {
                 filterIndex,
                 soundIndex,
                 sound: {
-                    inPadZone,
                     inPointerZone,
                     isHovering,
                     distM: gateDistM,
@@ -1190,11 +1417,7 @@ export function initHandControls(audio: AudioEngine): void {
         smoothResonance = null;
         smoothReverb = null;
         reverbActive = false;
-        soundInRange = false;
         smoothDistM = null;
-        soundPrevDistM = null;
-        soundPrevDistMs = null;
-        smoothApproachVelMps = null;
         lostSoundFrames = 0;
         pluckArmed = true;
         inPluckMode = false;
@@ -1278,7 +1501,6 @@ export function initHandControls(audio: AudioEngine): void {
         let soundDistM: number | null = null;
         // Debug snapshot scalars
         let vizGateDistM: number | null = null;
-        let vizInPadZone = false;
         let vizInPointerZone = false;
         let vizIsHovering = false;
         let vizPinchRatio: number | null = null;
@@ -1302,10 +1524,7 @@ export function initHandControls(audio: AudioEngine): void {
             }
         }
 
-        // Right hand control zones:
-        // - Pad zone (within 30cm): continuous pad/swell control
-        // - Pluck zone (35-50cm): fast jabs trigger single plucks
-        // Also: pinch openness controls reverb.
+        // Right hand: pointer zone + pinch pluck + reverb.
         if (soundHand) {
             const thumbTip = soundHand.landmarks[4];
             const indexTip = soundHand.landmarks[8];
@@ -1318,10 +1537,9 @@ export function initHandControls(audio: AudioEngine): void {
                 smoothSoundY = ema(smoothSoundY, middleMcp.y, POS_EMA_ALPHA);
 
                 // Mirror X to match selfie camera; apply X-Y scaling and offset.
-                const scaledX = XY_CENTER_X + (smoothSoundX - XY_CENTER_X) * xyScale;
-                const scaledY = XY_CENTER_Y + (smoothSoundY - XY_CENTER_Y) * xyScale;
-                const waveX = clamp(1 - scaledX, 0, 1);
-                const pitchY = clamp(1 - scaledY, 0, 1);
+                const viewX = 1 - smoothSoundX;
+                const viewY = smoothSoundY;
+                const { waveX, pitchY } = mapViewToPad(viewX, viewY);
                 vizWaveX = waveX;
                 vizPitchY = pitchY;
 
@@ -1332,29 +1550,16 @@ export function initHandControls(audio: AudioEngine): void {
                 const gateDist = smoothDistM ?? soundDistM;
                 vizGateDistM = gateDist;
 
-                // Determine which zone the hand is in.
-                const inPadZone = gateDist === null
-                    ? soundInRange
-                    : (soundInRange ? gateDist <= padZoneExitM : gateDist <= padZoneEnterM);
+                // Determine pointer zone (depth in meters).
                 const inPointerZone = gateDist === null
                     ? true
                     : gateDist <= pointerZoneMaxM;
-                vizInPadZone = inPadZone;
                 vizInPointerZone = inPointerZone;
 
-                // Estimate approach speed (m/s) from distance delta; positive means moving closer.
-                let approachVelNowMps = smoothApproachVelMps ?? 0;
-                if (soundDistM !== null) {
-                    if (soundPrevDistM !== null && soundPrevDistMs !== null) {
-                        const dt = (nowMs - soundPrevDistMs) / 1000;
-                        if (dt > 0.001) {
-                            const approachVel = (soundPrevDistM - soundDistM) / dt;
-                            approachVelNowMps = approachVel;
-                            smoothApproachVelMps = ema(smoothApproachVelMps, approachVel, ENTRY_VELOCITY_EMA_ALPHA);
-                        }
-                    }
-                    soundPrevDistM = soundDistM;
-                    soundPrevDistMs = nowMs;
+                // In View mode, always show the mapped cursor on the pad for calibration.
+                if (vizEnabled && !soundActive) {
+                    const { width, height } = getCanvasSize();
+                    setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID, true);
                 }
 
                 const handScale = Math.max(0.0001, dist2D(wrist2d, middleMcp));
@@ -1397,22 +1602,22 @@ export function initHandControls(audio: AudioEngine): void {
                 pinchPrevMs = nowMs;
 
                 // Re-arm pluck when pinch opens.
-                if (!pluckArmed && pinchRatio >= PLUCK_PINCH_REARM_RATIO) {
+                if (!pluckArmed && pinchRatio >= pluckPinchRearmRatio) {
                     pluckArmed = true;
                 }
 
-                const wantsHover = inPointerZone && !soundActive && !inPadZone;
+                const wantsHover = inPointerZone && !soundActive;
                 if (wantsHover) {
                     vizIsHovering = true;
                     if (!inPointerHover) {
                         inPointerHover = true;
                     }
                     const { width, height } = getCanvasSize();
-                    setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID, true);  // hover = true
+                    setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID, true);
 
                     const wantsPluck = pluckArmed
-                        && pinchRatio <= PLUCK_PINCH_CLOSED_RATIO
-                        && pinchCloseVelPerS >= PLUCK_PINCH_CLOSE_MIN_PER_S;
+                        && pinchRatio <= pluckPinchClosedRatio
+                        && pinchCloseVelPerS >= pluckPinchCloseMinPerS;
 
                     if (wantsPluck) {
                         pluckArmed = false;
@@ -1423,7 +1628,7 @@ export function initHandControls(audio: AudioEngine): void {
 
                         // Velocity-dependent attack shaping (faster pinch close = sharper attack).
                         const tLinear = clamp(
-                            (pinchCloseVelPerS - PLUCK_PINCH_CLOSE_MIN_PER_S) / (PLUCK_PINCH_CLOSE_MAX_PER_S - PLUCK_PINCH_CLOSE_MIN_PER_S),
+                            (pinchCloseVelPerS - pluckPinchCloseMinPerS) / (PLUCK_PINCH_CLOSE_MAX_PER_S - pluckPinchCloseMinPerS),
                             0,
                             1
                         );
@@ -1440,19 +1645,19 @@ export function initHandControls(audio: AudioEngine): void {
                         audio.update(waveX, pitchY, HAND_TOUCH_ID, 0);
 
                         addRipple(waveX * width, (1 - pitchY) * height);
-                        setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID);  // Switch to active cursor
+                        setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID);
                     }
                 } else if (inPointerHover && !wantsHover) {
                     // Exited pointer zone without plucking.
                     inPointerHover = false;
-                    if (!soundActive) {
+                    if (!soundActive && !vizEnabled) {
                         removeCursor(HAND_TOUCH_ID);
                     }
                 }
 
                 // Pinch-sustain pluck: sustain while pinched, release when open (or leaving pointer zone).
-                if (inPluckMode && soundActive && !inPadZone) {
-                    const pinchOpen = pinchRatio >= PLUCK_PINCH_REARM_RATIO;
+                if (inPluckMode && soundActive) {
+                    const pinchOpen = pinchRatio >= pluckPinchRearmRatio;
                     const stillInPointerZone = inPointerZone;
 
                     if (pinchOpen || !stillInPointerZone) {
@@ -1474,65 +1679,6 @@ export function initHandControls(audio: AudioEngine): void {
                     }
                 }
 
-                // Handle pad zone: continuous control.
-                if (inPadZone) {
-                    // Clear pluck mode and hover when entering pad zone.
-                    inPluckMode = false;
-                    inPointerHover = false;
-
-                    // Entering pad zone from outside.
-                    if (!soundInRange) {
-                        soundInRange = true;
-                        // Velocity-dependent attack shaping for smooth entry.
-                        const v = Math.max(0, Math.max(smoothApproachVelMps ?? 0, approachVelNowMps));
-                        const tLinear = clamp(
-                            (v - PAD_ENTRY_VELOCITY_MIN_MPS) / (PAD_ENTRY_VELOCITY_MAX_MPS - PAD_ENTRY_VELOCITY_MIN_MPS),
-                            0,
-                            1
-                        );
-                        const t = Math.pow(tLinear, PAD_ENTRY_VELOCITY_CURVE);
-                        const attack = PAD_ENTRY_ATTACK_SLOW_S * (1 - t) + PAD_ENTRY_ATTACK_FAST_S * t;
-                        audio.setHandAttackSeconds(attack);
-                        const { width, height } = getCanvasSize();
-                        addRipple(waveX * width, (1 - pitchY) * height);
-                    }
-
-                    if (!soundActive) {
-                        soundActive = true;
-                        soundStartMs = Date.now();
-                        audio.start(HAND_TOUCH_ID);
-                    }
-
-                    const duration = (Date.now() - soundStartMs) / 1000;
-                    audio.update(waveX, pitchY, HAND_TOUCH_ID, duration);
-                    soundLastUpdateMs = Date.now();
-
-                    const { width, height } = getCanvasSize();
-                    setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID);
-                } else if (!inPadZone && soundInRange) {
-                    // Exiting pad zone.
-                    const vOut = Math.max(0, Math.max(-(smoothApproachVelMps ?? 0), -approachVelNowMps));
-                    const tLinear = clamp(
-                        (vOut - EXIT_VELOCITY_MIN_MPS) / (EXIT_VELOCITY_MAX_MPS - EXIT_VELOCITY_MIN_MPS),
-                        0,
-                        1
-                    );
-                    const t = Math.pow(tLinear, EXIT_VELOCITY_CURVE);
-                    const release = EXIT_RELEASE_SLOW_S * (1 - t) + EXIT_RELEASE_FAST_S * t;
-                    soundInRange = false;
-                    if (soundActive) {
-                        stopHandVoice(release);
-                    }
-
-                    // If we're still within pointer zone, fall back to hover pointer.
-                    if (inPointerZone && !soundActive) {
-                        vizIsHovering = true;
-                        inPointerHover = true;
-                        const { width, height } = getCanvasSize();
-                        setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID, true);
-                    }
-                }
-
                 lostSoundFrames = 0;
             } else {
                 lostSoundFrames += 1;
@@ -1543,14 +1689,6 @@ export function initHandControls(audio: AudioEngine): void {
 
         if (lostSoundFrames >= LOST_HAND_FRAMES_TO_RELEASE) {
             stopHandVoice();
-        }
-
-        // Safety: force release if sound is stuck (not in pad zone and not in pinch-sustain pluck).
-        if (soundActive && !soundInRange && !inPluckMode) {
-            const stuckDuration = Date.now() - soundStartMs;
-            if (stuckDuration >= STUCK_SOUND_TIMEOUT_MS) {
-                stopHandVoice(PLUCK_RELEASE_S);
-            }
         }
 
         // Safety: force release if sound hasn't been updated recently (stale tracking).
@@ -1580,7 +1718,6 @@ export function initHandControls(audio: AudioEngine): void {
                 filterIndex,
                 soundIndex,
                 sound: {
-                    inPadZone: vizInPadZone,
                     inPointerZone: vizInPointerZone,
                     isHovering: vizIsHovering,
                     distM: vizGateDistM,

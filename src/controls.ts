@@ -52,6 +52,13 @@ export function updateScaleControlsPosition(_audio: AudioEngine): void {
 export function initControls(audio: AudioEngine) {
     // Mouse events - only handle left button (button 0)
     window.addEventListener('mousedown', e => {
+        const target = e.target as Element | null;
+        if (target?.closest('.mode-selector')) return;
+        if (target?.closest('.scale-controls')) return;
+        if (target?.closest('.loop-controls')) return;
+        if (target?.closest('.texture-controls')) return;
+        if (target?.closest('.beats-controls')) return;
+        if (target?.closest('.hand-viz')) return;
         if (e.button !== 0) return; // Only left-click
         handleStart(e.clientX, e.clientY, 'mouse', audio);
     });
@@ -85,6 +92,7 @@ export function initControls(audio: AudioEngine) {
         if (target.closest('.loop-controls')) return;
         if (target.closest('.texture-controls')) return;
         if (target.closest('.beats-controls')) return;
+        if (target.closest('.hand-viz')) return;
         e.preventDefault();
         for (const touch of Array.from(e.changedTouches)) {
             handleStart(touch.clientX, touch.clientY, touch.identifier, audio);
@@ -98,6 +106,7 @@ export function initControls(audio: AudioEngine) {
         if (target.closest('.loop-controls')) return;
         if (target.closest('.texture-controls')) return;
         if (target.closest('.beats-controls')) return;
+        if (target.closest('.hand-viz')) return;
         e.preventDefault();
         for (const touch of Array.from(e.changedTouches)) {
             handleMove(touch.clientX, touch.clientY, touch.identifier, audio);
@@ -111,6 +120,7 @@ export function initControls(audio: AudioEngine) {
         if (target.closest('.loop-controls')) return;
         if (target.closest('.texture-controls')) return;
         if (target.closest('.beats-controls')) return;
+        if (target.closest('.hand-viz')) return;
         e.preventDefault();
         for (const touch of Array.from(e.changedTouches)) {
             handleEnd(touch.identifier, audio);

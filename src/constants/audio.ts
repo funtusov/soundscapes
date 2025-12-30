@@ -161,6 +161,8 @@ export const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A',
 export const SCALE_PATTERNS: Record<string, number[]> = {
     major: [0, 2, 4, 5, 7, 9, 11],
     minor: [0, 2, 3, 5, 7, 8, 10],
+    // Backwards-compatible alias (major pentatonic)
+    pentatonic: [0, 2, 4, 7, 9],
     pent_maj: [0, 2, 4, 7, 9],           // Major pentatonic
     pent_min: [0, 3, 5, 7, 10],          // Minor pentatonic
     blues: [0, 3, 5, 6, 7, 10],          // Blues scale (minor pent + blue note)

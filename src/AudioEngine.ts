@@ -299,6 +299,9 @@ export class AudioEngine {
         const profile = TOUCH_PROFILES[category];
         const now = this.ctx.currentTime;
 
+        // Quick taps should sound like a single clean key/pluck release; avoid extra filter "re-attacks".
+        if (category === 'tap') return;
+
         // Apply filter release shaping
         if (profile.brightnessHold) {
             // Tap: keep filter bright, then snap shut
@@ -1054,7 +1057,11 @@ export class AudioEngine {
             if (options?.applyReleaseEnvelope !== false) {
                 this.applyReleaseEnvelope(duration);
             }
-            this.currentMode.stop(touchId, releaseTime, this.getEngineContext(touchId));
+            const engine = this.getEngineContext(touchId);
+            const isHand = typeof touchId === 'string' && touchId.startsWith('hand');
+            const releaseSeconds = isHand ? engine.envelope.release : releaseTime;
+
+            this.currentMode.stop(touchId, releaseSeconds, engine);
 
             if (this.currentMode.getVoiceCount() === 0 && this.masterGain) {
                 this.masterGain.gain.setTargetAtTime(0, now, releaseTime);

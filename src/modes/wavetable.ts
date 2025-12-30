@@ -105,13 +105,62 @@ export class WavetableMode extends BaseSynthMode {
     readonly hudLabels: [string, string] = ['X: Waveform | β: Cutoff', 'Y: Pitch | γ: Q'];
 
     private voices = new Map<TouchId, WavetableVoice>();
+    private pendingStarts = new Set<TouchId>();
 
     init(_engine: EngineContext): void {
         this.voices = new Map();
+        this.pendingStarts = new Set();
     }
 
-    start(_touchId: TouchId, _engine: EngineContext): void {
-        // Voice creation happens in update() for this mode
+    start(touchId: TouchId, _engine: EngineContext): void {
+        // Mark an onset; update() will create (or retrigger) the voice when it has x/y.
+        this.pendingStarts.add(touchId);
+    }
+
+    private releaseVoice(
+        touchId: TouchId,
+        voice: WavetableVoice,
+        releaseSeconds: number,
+        engine: EngineContext,
+        options?: { unregisterHUD?: boolean }
+    ): void {
+        const now = engine.ctx.currentTime;
+
+        // Stop arpeggio if running.
+        this.stopArpeggio(voice);
+
+        // Cancel any scheduled automation and release from the current value.
+        // Prefer cancelAndHoldAtTime (more accurate across browsers), fallback if unavailable.
+        const gainParam = voice.gain.gain as AudioParam & { cancelAndHoldAtTime?: (t: number) => void };
+        if (typeof gainParam.cancelAndHoldAtTime === 'function') {
+            gainParam.cancelAndHoldAtTime(now);
+        } else {
+            gainParam.cancelScheduledValues(now);
+            gainParam.setValueAtTime(gainParam.value, now);
+        }
+        gainParam.linearRampToValueAtTime(0, now + releaseSeconds);
+
+        voice.tremoloDepth.gain.setTargetAtTime(0, now, Math.max(0.01, releaseSeconds * 0.5));
+
+        // Unregister voice from HUD if requested.
+        if (options?.unregisterHUD !== false) {
+            engine.unregisterVoice(touchId);
+        }
+
+        setTimeout(() => {
+            this.cleanupOscillator(voice.osc);
+            this.cleanupOscillator(voice.lfo);
+            this.cleanupOscillator(voice.tremoloLfo);
+            this.cleanupGain(voice.gain);
+            this.cleanupGain(voice.lfoGain);
+            this.cleanupGain(voice.tremoloGain);
+            this.cleanupGain(voice.tremoloDepth);
+
+            // Safety: only remove the map entry if it's still this exact voice.
+            if (this.voices.get(touchId) === voice) {
+                this.voices.delete(touchId);
+            }
+        }, releaseSeconds * 1000 + VOICE_CLEANUP_BUFFER_MS);
     }
 
     /**
@@ -152,6 +201,7 @@ export class WavetableMode extends BaseSynthMode {
     update(x: number, y: number, touchId: TouchId, duration: number, engine: EngineContext): void {
         const { ctx, filter, envelope } = engine;
         const now = ctx.currentTime;
+        const isOnset = this.pendingStarts.has(touchId);
 
         // Compute note frequency from Y position (higher Y = higher pitch)
         const note = this.quantizeToScale(y, engine.rangeOctaves, engine.rangeBaseFreq, engine);
@@ -167,9 +217,18 @@ export class WavetableMode extends BaseSynthMode {
             chordName = this.getArpChordName(note.noteName, chordType);
         }
 
-        // Create voice if it doesn't exist
-        if (!this.voices.has(touchId)) {
-            if (this.voices.size >= MAX_VOICES) return;
+        // Create/retrigger voice on onset, so quick retriggers (mouse/hand) don't reuse a releasing voice.
+        if (!this.voices.has(touchId) || isOnset) {
+            const existing = this.voices.get(touchId);
+            if (!existing && this.voices.size >= MAX_VOICES) {
+                this.pendingStarts.delete(touchId);
+                return;
+            }
+
+            if (existing && isOnset) {
+                // Fast release to avoid overlapping artifacts on rapid retrigger.
+                this.releaseVoice(touchId, existing, 0.02, engine, { unregisterHUD: false });
+            }
 
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
@@ -247,6 +306,7 @@ export class WavetableMode extends BaseSynthMode {
             }
 
             this.voices.set(touchId, voice);
+            this.pendingStarts.delete(touchId);
 
             // Register voice for HUD display
             const displayName = engine.arpEnabled && engine.isQuantized ? chordName : note.noteName;
@@ -383,35 +443,13 @@ export class WavetableMode extends BaseSynthMode {
     stop(touchId: TouchId, _releaseTime: number, engine: EngineContext): void {
         if (!this.voices.has(touchId)) return;
 
+        this.pendingStarts.delete(touchId);
+
         const voice = this.voices.get(touchId)!;
-        const now = engine.ctx.currentTime;
 
-        // Stop arpeggio if running
-        this.stopArpeggio(voice);
-
-        // Use envelope's release time (ignore the passed releaseTime for ADSR presets)
-        const release = engine.envelope.release;
-
-        // Cancel any scheduled envelope automation and release from current value
-        voice.gain.gain.cancelScheduledValues(now);
-        voice.gain.gain.setValueAtTime(voice.gain.gain.value, now);
-        voice.gain.gain.linearRampToValueAtTime(0, now + release);
-
-        voice.tremoloDepth.gain.setTargetAtTime(0, now, release * 0.5); // Fade out tremolo
-
-        // Unregister voice from HUD immediately
-        engine.unregisterVoice(touchId);
-
-        setTimeout(() => {
-            this.cleanupOscillator(voice.osc);
-            this.cleanupOscillator(voice.lfo);
-            this.cleanupOscillator(voice.tremoloLfo);
-            this.cleanupGain(voice.gain);
-            this.cleanupGain(voice.lfoGain);
-            this.cleanupGain(voice.tremoloGain);
-            this.cleanupGain(voice.tremoloDepth);
-            this.voices.delete(touchId);
-        }, release * 1000 + VOICE_CLEANUP_BUFFER_MS);
+        // Use the provided releaseTime (AudioEngine decides based on touch duration / mode context).
+        const releaseSeconds = Math.max(0.005, _releaseTime);
+        this.releaseVoice(touchId, voice, releaseSeconds, engine);
     }
 
     cleanup(): void {
@@ -427,6 +465,7 @@ export class WavetableMode extends BaseSynthMode {
             this.cleanupGain(voice.tremoloDepth);
         }
         this.voices.clear();
+        this.pendingStarts.clear();
     }
 
     getVoiceCount(): number {
