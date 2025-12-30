@@ -176,7 +176,14 @@ public class TrueDepthHandPlugin: CAPPlugin, CAPBridgedPlugin, AVCaptureDataOutp
         }
 
         let sampleBuffer = videoData.sampleBuffer
-        let depth = depthData.depthData
+        var depth = depthData.depthData
+
+        // Convert disparity to depth if needed (TrueDepth often returns disparity)
+        let isDisparity = depth.depthDataType == kCVPixelFormatType_DisparityFloat32 ||
+                          depth.depthDataType == kCVPixelFormatType_DisparityFloat16
+        if isDisparity {
+            depth = depth.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
+        }
 
         // Run hand detection
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer),

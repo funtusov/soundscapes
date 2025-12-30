@@ -28,6 +28,12 @@
 
     <canvas id="canvas"></canvas>
 
+    <!-- Hand Tracking View (debug / training) -->
+    <div class="hand-viz hidden" id="handViz" aria-hidden="true">
+        <canvas id="handVizCanvas"></canvas>
+        <div class="hand-viz-legend" id="handVizLegend"></div>
+    </div>
+
     <!-- Scale Controls -->
     <div class="scale-controls" id="scaleControls" style="display: none;">
         <!-- Range: collapsible control with octaves + location -->
@@ -140,6 +146,35 @@
         <button class="compass-pan-btn" id="compassPanBtn" title="Compass Pan">Pan</button>
 
         <button class="hand-btn" id="handBtn" title="Hand Control">Hand</button>
+
+        <button class="hand-viz-btn" id="handVizBtn" title="Hand View">View</button>
+
+        <!-- Hand zone calibration -->
+        <div class="zones-control" id="zonesControl">
+            <button class="zones-summary" id="zonesSummary">Zones</button>
+            <div class="zones-options" id="zonesOptions">
+                <div class="zones-slider-row">
+                    <span class="zones-slider-label">Pad</span>
+                    <input type="range" id="padZoneSlider" min="20" max="60" value="30" class="zones-slider">
+                    <span class="zones-slider-value" id="padZoneValue">30cm</span>
+                </div>
+                <div class="zones-slider-row">
+                    <span class="zones-slider-label">Pointer</span>
+                    <input type="range" id="pointerZoneSlider" min="40" max="80" value="60" class="zones-slider">
+                    <span class="zones-slider-value" id="pointerZoneValue">60cm</span>
+                </div>
+                <div class="zones-slider-row">
+                    <span class="zones-slider-label">Cam</span>
+                    <input type="range" id="camFovSlider" min="40" max="100" value="60" class="zones-slider">
+                    <span class="zones-slider-value" id="camFovValue">60°</span>
+                </div>
+                <div class="zones-slider-row">
+                    <span class="zones-slider-label">Active</span>
+                    <input type="range" id="activeFovSlider" min="30" max="100" value="70" class="zones-slider">
+                    <span class="zones-slider-value" id="activeFovValue">70%</span>
+                </div>
+            </div>
+        </div>
 
         <!-- Noise: collapsible control -->
         <div class="noise-control" id="noiseControl">

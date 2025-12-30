@@ -240,8 +240,8 @@ export class AudioEngine {
             filter: this.filter!,
             masterGain: this.masterGain!,
             currentTime: this.ctx!.currentTime,
-            // Hand (webcam) control is intentionally continuous for a "theremin-ish" feel.
-            isQuantized: isHand ? false : this.isQuantized,
+            // Hand (webcam) control respects global quantization settings.
+            isQuantized: this.isQuantized,
             tonic: this.tonic,
             scaleType: this.scaleType,
             rangeOctaves: this.rangeOctaves,
