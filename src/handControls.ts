@@ -81,9 +81,6 @@ const HAND_LANDMARKER_MODEL_URL = 'https://storage.googleapis.com/mediapipe-mode
 // Fewer frames on mobile since tracking can be spottier.
 const LOST_HAND_FRAMES_TO_RELEASE = IS_MOBILE ? 4 : 6;
 
-// Maximum pluck duration (ms) before auto-release.
-const PLUCK_MAX_DURATION_MS = 120;
-
 // Safety timeout: force release if sound plays this long without being in pad zone.
 const STUCK_SOUND_TIMEOUT_MS = 500;
 
@@ -357,6 +354,7 @@ export function initHandControls(audio: AudioEngine): void {
     let inPointerHover = false;  // Hovering pointer (no sound)
     let pinchPrevRatio: number | null = null;
     let pinchPrevMs: number | null = null;
+    let pinchAttackFlashUntilMs = 0;
 
     // Smoothed point (0..1 in video coords, origin top-left)
     let smoothSoundX: number | null = null;
@@ -601,8 +599,18 @@ export function initHandControls(audio: AudioEngine): void {
 
                 // Pinch line emphasis (gesture).
                 if (thumb && index) {
+                    const nowMs = performance.now();
+                    const flash = nowMs <= pinchAttackFlashUntilMs;
+                    const sustaining = inPluckMode && soundActive;
+
+                    const pinchLineColor = flash
+                        ? 'rgba(0, 255, 120, 0.95)'
+                        : sustaining
+                            ? 'rgba(0, 255, 120, 0.7)'
+                            : 'rgba(255, 255, 255, 0.9)';
+
                     ctx.save();
-                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+                    ctx.strokeStyle = pinchLineColor;
                     ctx.lineWidth = 2.5 * dpr;
                     ctx.beginPath();
                     ctx.moveTo(mapX(thumb.x), mapY(thumb.y));
@@ -892,7 +900,7 @@ export function initHandControls(audio: AudioEngine): void {
                 ? soundInRange
                 : (soundInRange ? gateDist <= padZoneExitM : gateDist <= padZoneEnterM);
             inPointerZone = gateDist === null
-                ? soundInRange
+                ? true
                 : gateDist <= pointerZoneMaxM;
 
             // Estimate approach speed from depth delta
@@ -971,6 +979,7 @@ export function initHandControls(audio: AudioEngine): void {
                     inPluckMode = true;
                     inPointerHover = false;
                     isHovering = false;
+                    pinchAttackFlashUntilMs = nowMs + 200;
 
                     const tLinear = clamp(
                         (pinchCloseVelPerS - PLUCK_PINCH_CLOSE_MIN_PER_S) / (PLUCK_PINCH_CLOSE_MAX_PER_S - PLUCK_PINCH_CLOSE_MIN_PER_S),
@@ -998,11 +1007,27 @@ export function initHandControls(audio: AudioEngine): void {
                 }
             }
 
-            // Auto-release pluck after max duration
-            if (inPluckMode && soundActive) {
-                const pluckDuration = Date.now() - soundStartMs;
-                if (pluckDuration >= PLUCK_MAX_DURATION_MS) {
+            // Pinch-sustain pluck: sustain while pinched, release when open (or leaving pointer zone).
+            if (inPluckMode && soundActive && !inPadZone) {
+                const pinchOpen = soundHand.pinchRatio >= PLUCK_PINCH_REARM_RATIO;
+                const stillInPointerZone = inPointerZone;
+
+                if (pinchOpen || !stillInPointerZone) {
                     stopHandVoice(PLUCK_RELEASE_S);
+
+                    if (stillInPointerZone) {
+                        isHovering = true;
+                        inPointerHover = true;
+                        const { width, height } = getCanvasSize();
+                        setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID, true);
+                    }
+                } else {
+                    const duration = (Date.now() - soundStartMs) / 1000;
+                    audio.update(waveX, pitchY, HAND_TOUCH_ID, duration);
+                    soundLastUpdateMs = Date.now();
+
+                    const { width, height } = getCanvasSize();
+                    setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID);
                 }
             }
 
@@ -1070,8 +1095,8 @@ export function initHandControls(audio: AudioEngine): void {
             stopHandVoice();
         }
 
-        // Safety: force release if sound is stuck
-        if (soundActive && !soundInRange) {
+        // Safety: force release if sound is stuck (not in pad zone and not in pinch-sustain pluck).
+        if (soundActive && !soundInRange && !inPluckMode) {
             const stuckDuration = Date.now() - soundStartMs;
             if (stuckDuration >= STUCK_SOUND_TIMEOUT_MS) {
                 stopHandVoice(PLUCK_RELEASE_S);
@@ -1176,6 +1201,7 @@ export function initHandControls(audio: AudioEngine): void {
         inPointerHover = false;
         pinchPrevRatio = null;
         pinchPrevMs = null;
+        pinchAttackFlashUntilMs = 0;
         soundLastUpdateMs = 0;
         usingNative = false;
     };
@@ -1311,7 +1337,7 @@ export function initHandControls(audio: AudioEngine): void {
                     ? soundInRange
                     : (soundInRange ? gateDist <= padZoneExitM : gateDist <= padZoneEnterM);
                 const inPointerZone = gateDist === null
-                    ? soundInRange
+                    ? true
                     : gateDist <= pointerZoneMaxM;
                 vizInPadZone = inPadZone;
                 vizInPointerZone = inPointerZone;
@@ -1393,6 +1419,7 @@ export function initHandControls(audio: AudioEngine): void {
                         inPluckMode = true;
                         inPointerHover = false;
                         vizIsHovering = false;
+                        pinchAttackFlashUntilMs = nowMs + 200;
 
                         // Velocity-dependent attack shaping (faster pinch close = sharper attack).
                         const tLinear = clamp(
@@ -1423,11 +1450,27 @@ export function initHandControls(audio: AudioEngine): void {
                     }
                 }
 
-                // Auto-release pluck after max duration.
-                if (inPluckMode && soundActive) {
-                    const pluckDuration = Date.now() - soundStartMs;
-                    if (pluckDuration >= PLUCK_MAX_DURATION_MS) {
+                // Pinch-sustain pluck: sustain while pinched, release when open (or leaving pointer zone).
+                if (inPluckMode && soundActive && !inPadZone) {
+                    const pinchOpen = pinchRatio >= PLUCK_PINCH_REARM_RATIO;
+                    const stillInPointerZone = inPointerZone;
+
+                    if (pinchOpen || !stillInPointerZone) {
                         stopHandVoice(PLUCK_RELEASE_S);
+
+                        if (stillInPointerZone) {
+                            vizIsHovering = true;
+                            inPointerHover = true;
+                            const { width, height } = getCanvasSize();
+                            setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID, true);
+                        }
+                    } else {
+                        const duration = (Date.now() - soundStartMs) / 1000;
+                        audio.update(waveX, pitchY, HAND_TOUCH_ID, duration);
+                        soundLastUpdateMs = Date.now();
+
+                        const { width, height } = getCanvasSize();
+                        setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID);
                     }
                 }
 
@@ -1502,8 +1545,8 @@ export function initHandControls(audio: AudioEngine): void {
             stopHandVoice();
         }
 
-        // Safety: force release if sound is stuck (playing but not in pad zone for too long).
-        if (soundActive && !soundInRange) {
+        // Safety: force release if sound is stuck (not in pad zone and not in pinch-sustain pluck).
+        if (soundActive && !soundInRange && !inPluckMode) {
             const stuckDuration = Date.now() - soundStartMs;
             if (stuckDuration >= STUCK_SOUND_TIMEOUT_MS) {
                 stopHandVoice(PLUCK_RELEASE_S);
