@@ -117,7 +117,7 @@ const RIGHT_HAND_REF_LEN_M = 0.07; // approx wrist → middle MCP
 const DEFAULT_CAMERA_FOV_DEG = IS_MOBILE ? 80 : 60;
 
 // Zone threshold (meters): max distance where hover pointer is shown.
-const DEFAULT_POINTER_ZONE_MAX_M = IS_MOBILE ? 0.50 : 0.60;
+const DEFAULT_POINTER_ZONE_MAX_M = IS_MOBILE ? 0.50 : 0.65;
 
 // View-to-pad mapping rectangle.
 // - x is in mirrored "view" coordinates (0=left, 1=right).
@@ -127,7 +127,7 @@ type ViewMappingRect = { left: number; right: number; top: number; bottom: numbe
 const DEFAULT_VIEW_MAPPING_RECT: ViewMappingRect = { left: 0.30, right: 0.90, top: 0.30, bottom: 0.80 };
 
 // Pluck gesture: quick pinch (thumb+index) while hovering in pointer zone.
-const PLUCK_PINCH_CLOSED_RATIO = 0.15;
+const PLUCK_PINCH_CLOSED_RATIO = 0.18;
 const PLUCK_PINCH_REARM_RATIO = 0.20;
 const PLUCK_PINCH_CLOSE_MIN_PER_S = 0.5;
 const PLUCK_PINCH_CLOSE_MAX_PER_S = 4.0;
@@ -948,7 +948,7 @@ export function initHandControls(audio: AudioEngine): void {
         }
     };
 
-    const MIN_PLUCK_REARM_GAP = 0.05;
+    const MIN_PLUCK_REARM_GAP = 0.01;
 
     const setPluckPinchClosedRatio = (ratio: number) => {
         const ratioClamped = clamp(ratio, 0.15, 0.60);
