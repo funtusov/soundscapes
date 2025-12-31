@@ -124,7 +124,7 @@ const DEFAULT_POINTER_ZONE_MAX_M = IS_MOBILE ? 0.50 : 0.60;
 // - y is in video coordinates (0=top, 1=bottom).
 // The rectangle defines what part of the camera view maps to the full pad range.
 type ViewMappingRect = { left: number; right: number; top: number; bottom: number };
-const DEFAULT_VIEW_MAPPING_RECT: ViewMappingRect = { left: 0.20, right: 0.80, top: 0.30, bottom: 0.80 };
+const DEFAULT_VIEW_MAPPING_RECT: ViewMappingRect = { left: 0.30, right: 0.90, top: 0.30, bottom: 0.80 };
 
 // Pluck gesture: quick pinch (thumb+index) while hovering in pointer zone.
 const PLUCK_PINCH_CLOSED_RATIO = 0.15;
