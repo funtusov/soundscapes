@@ -72,7 +72,7 @@ export class AudioEngine {
     dataArray: Float32Array | null = null;
     nodes: ModeNodes = {};
     touches = new Map<TouchId, unknown>();
-    orientationParams: OrientationParams = { pan: 0, filterMod: 0, lfoRate: 0, shake: 0, compass: 0 };
+    orientationParams: OrientationParams = { pan: 0, filterMod: 0, lfoRate: 0, vibratoHz: 0, shake: 0, compass: 0 };
     isQuantized = true;
     tonic = 7; // G
     scaleType = 'pent_min';
@@ -128,6 +128,7 @@ export class AudioEngine {
     private handAttackSeconds: number | null = null;
     private handReleaseSeconds: number | null = null;
     private handShake: number = 0;
+    private handVibratoHz: number = 0;
     private motionLabelBase: string = '--';
 
     constructor() {
@@ -238,7 +239,11 @@ export class AudioEngine {
             }
             : baseEnvelope;
         const orientationParams = isHand
-            ? { ...this.orientationParams, shake: Math.max(this.orientationParams.shake, this.handShake) }
+            ? {
+                ...this.orientationParams,
+                shake: Math.max(this.orientationParams.shake, this.handShake),
+                vibratoHz: this.handVibratoHz,
+            }
             : this.orientationParams;
         return {
             ctx: this.ctx!,
@@ -274,20 +279,20 @@ export class AudioEngine {
             if (current) this.motionLabelBase = current;
         }
 
-        const handVibActive = this.handShake > SHAKE_ACCELERATION_THRESHOLD;
-        const deviceShakeActive = this.orientationParams.shake > SHAKE_ACCELERATION_THRESHOLD;
+        const base = this.motionLabelBase;
+        const vibHz = this.handVibratoHz;
+        const vibActive = vibHz >= 1;
+        const tremoloActive = this.handShake > SHAKE_ACCELERATION_THRESHOLD;
 
-        if (handVibActive && deviceShakeActive) {
-            motionEl.innerText = 'VIB/TR+SHAKE';
+        if (!vibActive && !tremoloActive) {
+            motionEl.innerText = base;
             return;
         }
 
-        if (handVibActive) {
-            motionEl.innerText = 'VIB/TR';
-            return;
-        }
-
-        motionEl.innerText = this.motionLabelBase;
+        const parts: string[] = [base];
+        if (vibActive) parts.push(`VIB ${vibHz.toFixed(1)}Hz`);
+        if (tremoloActive) parts.push('TR');
+        motionEl.innerText = parts.join(' · ');
     }
 
     /** Hand (webcam): set attack time (seconds) for the next onset. */
@@ -303,6 +308,12 @@ export class AudioEngine {
     /** Hand (webcam): set shake intensity for vibrato/tremolo modulation (0..~20). */
     setHandShake(shake: number): void {
         this.handShake = clamp(shake, 0, 30);
+        this.renderMotionLabel();
+    }
+
+    /** Hand (webcam): set detected vibrato rate (Hz) from hand periodicity. */
+    setHandVibratoHz(hz: number): void {
+        this.handVibratoHz = clamp(hz, 0, 20);
         this.renderMotionLabel();
     }
 

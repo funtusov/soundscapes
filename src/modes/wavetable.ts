@@ -7,7 +7,7 @@
 
 import type { TouchId, WavetableVoice } from '../types';
 import { BaseSynthMode, EngineContext, MAX_VOICES, VOICE_GAIN, VOICE_CLEANUP_BUFFER_MS } from './base';
-import { SHAKE_ACCELERATION_THRESHOLD, type ChordType } from '../constants';
+import { clamp, SHAKE_ACCELERATION_THRESHOLD, type ChordType } from '../constants';
 
 // Number of harmonics for waveform synthesis
 const NUM_HARMONICS = 32;
@@ -376,16 +376,17 @@ export class WavetableMode extends BaseSynthMode {
         const shake = engine.orientationParams.shake;
         const isShaking = shake > SHAKE_ACCELERATION_THRESHOLD;
         const shakeIntensity = isShaking ? Math.min(1, (shake - SHAKE_ACCELERATION_THRESHOLD) / 10) : 0;
+        const detectedVibratoHz = clamp(engine.orientationParams.vibratoHz, 0, 14);
 
         // Vibrato depth increases with X (waveform position) and shake
         const baseVibratoDepth = 30 + x * 40; // 30-70 cents base
         const shakeVibratoBoost = shakeIntensity * 80; // Up to 80 cents extra on shake
         const modDepth = baseVibratoDepth * 0.5 + shakeVibratoBoost;
 
-        // LFO rate: faster on shake for more intense effect
+        // LFO rate: follow detected hand periodicity when available, else speed up on shake.
         const durationFactor = Math.min(1, duration / 3);
         const baseLfoRate = 2 + durationFactor * 4;
-        const lfoRate = baseLfoRate + shakeIntensity * 6; // Speed up on shake
+        const lfoRate = detectedVibratoHz >= 1 ? detectedVibratoHz : (baseLfoRate + shakeIntensity * 6);
 
         voice.lfoGain.gain.setTargetAtTime(modDepth, now, 0.05);
         voice.lfo.frequency.setTargetAtTime(lfoRate, now, 0.1);
@@ -393,7 +394,7 @@ export class WavetableMode extends BaseSynthMode {
         // Tremolo: only active on shake
         // tremoloDepth controls amplitude modulation amount (0 = none, 0.5 = ±50% volume swing)
         const tremoloAmount = shakeIntensity * 0.4; // Up to 40% volume modulation
-        const tremoloRate = 6 + shakeIntensity * 8;  // 6-14 Hz tremolo rate
+        const tremoloRate = detectedVibratoHz >= 1 ? clamp(detectedVibratoHz, 4, 14) : (6 + shakeIntensity * 8);  // 6-14 Hz tremolo rate
         voice.tremoloDepth.gain.setTargetAtTime(tremoloAmount, now, 0.02);
         voice.tremoloLfo.frequency.setTargetAtTime(tremoloRate, now, 0.05);
 

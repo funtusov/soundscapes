@@ -90,10 +90,17 @@ const REVERB_EMA_ALPHA = 0.25;
 
 // Hand "shake" detection (for vibrato): based on high acceleration of the control point.
 // Scale converts view-space accel (0..1 per s^2) to device-like "shake" magnitude.
-const DEFAULT_HAND_SHAKE_SENSITIVITY = 3.0;
+const DEFAULT_HAND_SHAKE_SENSITIVITY = 6.0;
 const MIN_HAND_SHAKE_SENSITIVITY = 0.5;
-const MAX_HAND_SHAKE_SENSITIVITY = 6.0;
+const MAX_HAND_SHAKE_SENSITIVITY = 12.0;
 const HAND_SHAKE_EMA_ALPHA = 0.25;
+
+// Hand vibrato rate detection (Hz): inferred from the periodicity of the control point.
+const HAND_VIB_MIN_EXTREMUM_AMP = 0.008;
+const HAND_VIB_MIN_HALF_PERIOD_MS = 40;   // ~12.5 Hz max
+const HAND_VIB_MAX_HALF_PERIOD_MS = 500;  // ~1.0 Hz min
+const HAND_VIB_HZ_EMA_ALPHA = 0.2;
+const HAND_VIB_TIMEOUT_MS = 550;
 
 // Right-hand pinch openness → reverb (0..1)
 // 0 => pinched, 1 => open pinch.
@@ -380,6 +387,14 @@ export function initHandControls(audio: AudioEngine): void {
     let shakePrevVx: number | null = null;
     let shakePrevVy: number | null = null;
     let smoothHandShake: number | null = null;
+    let vibLastExtremumMsX: number | null = null;
+    let vibLastExtremumPosX: number | null = null;
+    let vibPrevSignX: -1 | 1 | null = null;
+    let vibLastExtremumMsY: number | null = null;
+    let vibLastExtremumPosY: number | null = null;
+    let vibPrevSignY: -1 | 1 | null = null;
+    let vibLastAnyExtremumMs: number | null = null;
+    let smoothHandVibratoHz: number | null = null;
 
     // Pluck gesture state.
     let pluckArmed = true;  // Ready to trigger next pluck (re-arms when pinch opens)
@@ -408,18 +423,30 @@ export function initHandControls(audio: AudioEngine): void {
         shakePrevVx = null;
         shakePrevVy = null;
         smoothHandShake = null;
+        vibLastExtremumMsX = null;
+        vibLastExtremumPosX = null;
+        vibPrevSignX = null;
+        vibLastExtremumMsY = null;
+        vibLastExtremumPosY = null;
+        vibPrevSignY = null;
+        vibLastAnyExtremumMs = null;
+        smoothHandVibratoHz = null;
         audio.setHandShake(0);
+        audio.setHandVibratoHz(0);
     };
 
-    const updateHandShake = (viewX: number, viewY: number, nowMs: number): number => {
+    const updateHandMotion = (viewX: number, viewY: number, nowMs: number): { shake: number; vibratoHz: number } => {
         if (shakePrevMs === null || shakePrevViewX === null || shakePrevViewY === null) {
             shakePrevMs = nowMs;
             shakePrevViewX = viewX;
             shakePrevViewY = viewY;
             shakePrevVx = null;
             shakePrevVy = null;
+            vibPrevSignX = null;
+            vibPrevSignY = null;
             smoothHandShake = null;
-            return 0;
+            smoothHandVibratoHz = null;
+            return { shake: 0, vibratoHz: 0 };
         }
 
         const dt = (nowMs - shakePrevMs) / 1000;
@@ -430,13 +457,81 @@ export function initHandControls(audio: AudioEngine): void {
             shakePrevViewY = viewY;
             shakePrevVx = null;
             shakePrevVy = null;
+            vibPrevSignX = null;
+            vibPrevSignY = null;
             smoothHandShake = null;
-            return 0;
+            smoothHandVibratoHz = null;
+            return { shake: 0, vibratoHz: 0 };
         }
 
         const vx = (viewX - shakePrevViewX) / dt;
         const vy = (viewY - shakePrevViewY) / dt;
 
+        // Periodicity → vibrato rate: detect turning points (velocity sign changes).
+        const signX: -1 | 1 = vx >= 0 ? 1 : -1;
+        const signY: -1 | 1 = vy >= 0 ? 1 : -1;
+
+        let candidateHz: number | null = null;
+        let weightSum = 0;
+
+        const maybeAddAxisCandidate = (
+            axis: 'x' | 'y',
+            signNow: -1 | 1,
+            prevSign: -1 | 1 | null,
+            posNow: number,
+            lastMs: number | null,
+            lastPos: number | null,
+        ) => {
+            if (prevSign !== null && prevSign !== signNow) {
+                // Extremum detected.
+                if (lastMs !== null && lastPos !== null) {
+                    const halfPeriodMs = nowMs - lastMs;
+                    const amp = Math.abs(posNow - lastPos);
+                    if (
+                        amp >= HAND_VIB_MIN_EXTREMUM_AMP
+                        && halfPeriodMs >= HAND_VIB_MIN_HALF_PERIOD_MS
+                        && halfPeriodMs <= HAND_VIB_MAX_HALF_PERIOD_MS
+                    ) {
+                        const hz = 1000 / (2 * halfPeriodMs);
+                        vibLastAnyExtremumMs = nowMs;
+
+                        const w = amp;
+                        const prev = candidateHz ?? 0;
+                        candidateHz = prev + hz * w;
+                        weightSum += w;
+                    }
+                }
+
+                // Update last extremum (even if we didn't emit a candidate yet, so we can lock on quickly).
+                if (axis === 'x') {
+                    vibLastExtremumMsX = nowMs;
+                    vibLastExtremumPosX = posNow;
+                } else {
+                    vibLastExtremumMsY = nowMs;
+                    vibLastExtremumPosY = posNow;
+                }
+            }
+        };
+
+        maybeAddAxisCandidate('x', signX, vibPrevSignX, viewX, vibLastExtremumMsX, vibLastExtremumPosX);
+        maybeAddAxisCandidate('y', signY, vibPrevSignY, viewY, vibLastExtremumMsY, vibLastExtremumPosY);
+
+        vibPrevSignX = signX;
+        vibPrevSignY = signY;
+
+        let vibHz = 0;
+        if (candidateHz !== null && weightSum > 0) {
+            const hz = clamp(candidateHz / weightSum, 1, 14);
+            smoothHandVibratoHz = ema(smoothHandVibratoHz, hz, HAND_VIB_HZ_EMA_ALPHA);
+            vibHz = smoothHandVibratoHz;
+        } else if (vibLastAnyExtremumMs !== null && nowMs - vibLastAnyExtremumMs > HAND_VIB_TIMEOUT_MS) {
+            smoothHandVibratoHz = null;
+            vibHz = 0;
+        } else {
+            vibHz = smoothHandVibratoHz ?? 0;
+        }
+
+        // Acceleration magnitude → intensity.
         let acc = 0;
         if (shakePrevVx !== null && shakePrevVy !== null) {
             const ax = (vx - shakePrevVx) / dt;
@@ -452,7 +547,8 @@ export function initHandControls(audio: AudioEngine): void {
 
         const shake = clamp(acc * handShakeSensitivity, 0, 30);
         smoothHandShake = ema(smoothHandShake, shake, HAND_SHAKE_EMA_ALPHA);
-        return smoothHandShake;
+
+        return { shake: smoothHandShake ?? 0, vibratoHz: vibHz };
     };
 
     type VizLayout = { dpr: number; offsetX: number; offsetY: number; drawW: number; drawH: number };
@@ -1410,8 +1506,9 @@ export function initHandControls(audio: AudioEngine): void {
                     }
                 } else {
                     const duration = (Date.now() - soundStartMs) / 1000;
-                    const shake = updateHandShake(viewXRaw, viewYRaw, nowMs);
-                    audio.setHandShake(shake);
+                    const motion = updateHandMotion(viewXRaw, viewYRaw, nowMs);
+                    audio.setHandShake(motion.shake);
+                    audio.setHandVibratoHz(motion.vibratoHz);
                     audio.update(waveX, pitchY, HAND_TOUCH_ID, duration);
                     soundLastUpdateMs = Date.now();
 
@@ -1774,8 +1871,9 @@ export function initHandControls(audio: AudioEngine): void {
                         }
                     } else {
                         const duration = (Date.now() - soundStartMs) / 1000;
-                        const shake = updateHandShake(viewXRaw, viewYRaw, nowMs);
-                        audio.setHandShake(shake);
+                        const motion = updateHandMotion(viewXRaw, viewYRaw, nowMs);
+                        audio.setHandShake(motion.shake);
+                        audio.setHandVibratoHz(motion.vibratoHz);
                         audio.update(waveX, pitchY, HAND_TOUCH_ID, duration);
                         soundLastUpdateMs = Date.now();
 

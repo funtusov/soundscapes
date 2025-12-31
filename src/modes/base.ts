@@ -31,6 +31,7 @@ export interface EngineContext {
         pan: number;
         filterMod: number;
         lfoRate: number;
+        vibratoHz: number;
         shake: number;
         compass: number;
     };

@@ -10,6 +10,7 @@ export interface OrientationParams {
     pan: number;
     filterMod: number;
     lfoRate: number;
+    vibratoHz: number;
     shake: number;
     compass: number;  // Alpha (compass heading) 0-360
 }
