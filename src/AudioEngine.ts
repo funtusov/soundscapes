@@ -127,6 +127,7 @@ export class AudioEngine {
     // Hand (webcam) onset shaping
     private handAttackSeconds: number | null = null;
     private handReleaseSeconds: number | null = null;
+    private handShake: number = 0;
 
     constructor() {
         // Silent audio for iOS unlock
@@ -235,6 +236,9 @@ export class AudioEngine {
                 release: clamp(this.handReleaseSeconds ?? baseEnvelope.release, 0.005, 2.0),
             }
             : baseEnvelope;
+        const orientationParams = isHand
+            ? { ...this.orientationParams, shake: Math.max(this.orientationParams.shake, this.handShake) }
+            : this.orientationParams;
         return {
             ctx: this.ctx!,
             filter: this.filter!,
@@ -249,7 +253,7 @@ export class AudioEngine {
             envelope,
             arpEnabled: this.arpEnabled,
             arpRate: this.arpRate,
-            orientationParams: this.orientationParams,
+            orientationParams,
             updateHUD: (freq, harm) => this.updateHUD(freq, harm),
             registerVoice: (info) => this.registerVoice(info),
             updateVoice: (touchId, info) => this.updateVoice(touchId, info),
@@ -267,6 +271,11 @@ export class AudioEngine {
     /** Hand (webcam): set release time (seconds) for the next note-off. */
     setHandReleaseSeconds(seconds: number): void {
         this.handReleaseSeconds = seconds;
+    }
+
+    /** Hand (webcam): set shake intensity for vibrato/tremolo modulation (0..~20). */
+    setHandShake(shake: number): void {
+        this.handShake = clamp(shake, 0, 30);
     }
 
     initMode(): void {

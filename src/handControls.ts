@@ -88,6 +88,11 @@ const PALM_EMA_ALPHA = 0.25;
 const RESONANCE_EMA_ALPHA = 0.25;
 const REVERB_EMA_ALPHA = 0.25;
 
+// Hand "shake" detection (for vibrato): based on high acceleration of the control point.
+// Scale converts view-space accel (0..1 per s^2) to device-like "shake" magnitude.
+const HAND_SHAKE_ACCEL_SCALE = 0.3;
+const HAND_SHAKE_EMA_ALPHA = 0.25;
+
 // Right-hand pinch openness → reverb (0..1)
 // 0 => pinched, 1 => open pinch.
 const PINCH_RATIO_REVERB_MIN = 0.25;
@@ -362,6 +367,14 @@ export function initHandControls(audio: AudioEngine): void {
     let lostSoundFrames = 0;
     let smoothDistM: number | null = null;
 
+    // Hand shake state (for vibrato on sustained notes).
+    let shakePrevMs: number | null = null;
+    let shakePrevViewX: number | null = null;
+    let shakePrevViewY: number | null = null;
+    let shakePrevVx: number | null = null;
+    let shakePrevVy: number | null = null;
+    let smoothHandShake: number | null = null;
+
     // Pluck gesture state.
     let pluckArmed = true;  // Ready to trigger next pluck (re-arms when pinch opens)
     let inPluckMode = false;  // Currently playing a pluck (not pad)
@@ -381,6 +394,60 @@ export function initHandControls(audio: AudioEngine): void {
     // Native TrueDepth tracking state
     let usingNative = false;
     let nativeListenerRemove: (() => void) | null = null;
+
+    const resetHandShake = () => {
+        shakePrevMs = null;
+        shakePrevViewX = null;
+        shakePrevViewY = null;
+        shakePrevVx = null;
+        shakePrevVy = null;
+        smoothHandShake = null;
+        audio.setHandShake(0);
+    };
+
+    const updateHandShake = (viewX: number, viewY: number, nowMs: number): number => {
+        if (shakePrevMs === null || shakePrevViewX === null || shakePrevViewY === null) {
+            shakePrevMs = nowMs;
+            shakePrevViewX = viewX;
+            shakePrevViewY = viewY;
+            shakePrevVx = null;
+            shakePrevVy = null;
+            smoothHandShake = null;
+            return 0;
+        }
+
+        const dt = (nowMs - shakePrevMs) / 1000;
+        if (dt <= 0.001 || dt >= 0.25) {
+            // Dropouts / tab switches: avoid huge spikes.
+            shakePrevMs = nowMs;
+            shakePrevViewX = viewX;
+            shakePrevViewY = viewY;
+            shakePrevVx = null;
+            shakePrevVy = null;
+            smoothHandShake = null;
+            return 0;
+        }
+
+        const vx = (viewX - shakePrevViewX) / dt;
+        const vy = (viewY - shakePrevViewY) / dt;
+
+        let acc = 0;
+        if (shakePrevVx !== null && shakePrevVy !== null) {
+            const ax = (vx - shakePrevVx) / dt;
+            const ay = (vy - shakePrevVy) / dt;
+            acc = Math.hypot(ax, ay);
+        }
+
+        shakePrevMs = nowMs;
+        shakePrevViewX = viewX;
+        shakePrevViewY = viewY;
+        shakePrevVx = vx;
+        shakePrevVy = vy;
+
+        const shake = clamp(acc * HAND_SHAKE_ACCEL_SCALE, 0, 30);
+        smoothHandShake = ema(smoothHandShake, shake, HAND_SHAKE_EMA_ALPHA);
+        return smoothHandShake;
+    };
 
     type VizLayout = { dpr: number; offsetX: number; offsetY: number; drawW: number; drawH: number };
     let vizLayout: VizLayout | null = null;
@@ -1123,6 +1190,7 @@ export function initHandControls(audio: AudioEngine): void {
         inPluckMode = false;
         inPointerHover = false;
         removeCursor(HAND_TOUCH_ID);
+        resetHandShake();
     };
 
     /**
@@ -1270,6 +1338,7 @@ export function initHandControls(audio: AudioEngine): void {
                     inPointerHover = false;
                     isHovering = false;
                     pinchAttackFlashUntilMs = nowMs + 200;
+                    resetHandShake();
 
                     const tLinear = clamp(
                         (pinchCloseVelPerS - pluckPinchCloseMinPerS) / (PLUCK_PINCH_CLOSE_MAX_PER_S - pluckPinchCloseMinPerS),
@@ -1313,6 +1382,8 @@ export function initHandControls(audio: AudioEngine): void {
                     }
                 } else {
                     const duration = (Date.now() - soundStartMs) / 1000;
+                    const shake = updateHandShake(viewX, viewY, nowMs);
+                    audio.setHandShake(shake);
                     audio.update(waveX, pitchY, HAND_TOUCH_ID, duration);
                     soundLastUpdateMs = Date.now();
 
@@ -1625,6 +1696,7 @@ export function initHandControls(audio: AudioEngine): void {
                         inPointerHover = false;
                         vizIsHovering = false;
                         pinchAttackFlashUntilMs = nowMs + 200;
+                        resetHandShake();
 
                         // Velocity-dependent attack shaping (faster pinch close = sharper attack).
                         const tLinear = clamp(
@@ -1671,6 +1743,8 @@ export function initHandControls(audio: AudioEngine): void {
                         }
                     } else {
                         const duration = (Date.now() - soundStartMs) / 1000;
+                        const shake = updateHandShake(viewX, viewY, nowMs);
+                        audio.setHandShake(shake);
                         audio.update(waveX, pitchY, HAND_TOUCH_ID, duration);
                         soundLastUpdateMs = Date.now();
 
