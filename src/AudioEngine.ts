@@ -80,13 +80,14 @@ export class AudioEngine {
     scaleType = 'pent_min';
 
     // Frequency range: octaves + location
-    private locationBaseFreqs = {
-        bass: 55,   // A1 - sub-bass/bass territory
-        mid: 110,   // A2 - mid range, good default
-        high: 220   // A3 - treble territory
-    } as const;
+    // Dynamic base frequency based on location and octave count:
+    // - Bass: starts at lowest (A1 = 55Hz), extends upward
+    // - Mid: centered within 5-octave range
+    // - Treble: ends at highest (A6 = 1760Hz), extends downward
+    private static readonly LOWEST_BASE = 55;    // A1
+    private static readonly TOTAL_OCTAVES = 5;   // A1-A6 range
     rangeOctaves = 3;
-    rangeLocation: 'bass' | 'mid' | 'high' = 'mid';
+    rangeLocation: 'bass' | 'mid' | 'treble' = 'mid';
     scale = [0, 3, 5, 7, 10, 12, 15, 17, 19, 22, 24];
     silentAudio: HTMLAudioElement;
 
@@ -260,7 +261,7 @@ export class AudioEngine {
             tonic: this.tonic,
             scaleType: this.scaleType,
             rangeOctaves: this.rangeOctaves,
-            rangeBaseFreq: this.locationBaseFreqs[this.rangeLocation],
+            rangeBaseFreq: this.getBaseFreq(),
             envelope,
             arpEnabled: this.arpEnabled,
             arpRate: this.arpRate,
@@ -986,8 +987,29 @@ export class AudioEngine {
     }
 
     /** Set range location */
-    setRangeLocation(location: 'bass' | 'mid' | 'high'): void {
+    setRangeLocation(location: 'bass' | 'mid' | 'treble'): void {
         this.rangeLocation = location;
+    }
+
+    /**
+     * Calculate base frequency based on location and octave count.
+     * - Bass: starts at lowest (A1 = 55Hz), extends upward
+     * - Mid: centered within 5-octave range
+     * - Treble: ends at highest (A6 = 1760Hz), extends downward
+     */
+    private getBaseFreq(): number {
+        const { LOWEST_BASE, TOTAL_OCTAVES } = AudioEngine;
+        switch (this.rangeLocation) {
+            case 'bass':
+                // Start from lowest
+                return LOWEST_BASE;
+            case 'mid':
+                // Center within total range
+                return LOWEST_BASE * Math.pow(2, (TOTAL_OCTAVES - this.rangeOctaves) / 2);
+            case 'treble':
+                // End at highest (offset down from top)
+                return LOWEST_BASE * Math.pow(2, TOTAL_OCTAVES - this.rangeOctaves);
+        }
     }
 
     /** Get current range info */
@@ -995,16 +1017,16 @@ export class AudioEngine {
         return {
             octaves: this.rangeOctaves,
             location: this.rangeLocation,
-            baseFreq: this.locationBaseFreqs[this.rangeLocation]
+            baseFreq: this.getBaseFreq()
         };
     }
 
     /** Get range info for visualizer (octave count and positions) */
     getRangeInfo(): { octaves: number; baseFreq: number; name: string } {
-        const locationNames = { bass: 'Bass', mid: 'Mid', high: 'High' };
+        const locationNames = { bass: 'Bass', mid: 'Mid', treble: 'Treble' };
         return {
             octaves: this.rangeOctaves,
-            baseFreq: this.locationBaseFreqs[this.rangeLocation],
+            baseFreq: this.getBaseFreq(),
             name: `${this.rangeOctaves} ${locationNames[this.rangeLocation]}`
         };
     }

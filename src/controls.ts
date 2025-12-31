@@ -360,7 +360,7 @@ export function initScaleControls(audio: AudioEngine) {
     const locationNames: Record<string, string> = {
         bass: 'Bass',
         mid: 'Mid',
-        high: 'High'
+        treble: 'Treble'
     };
 
     const updateRangeSummary = () => {
@@ -409,7 +409,7 @@ export function initScaleControls(audio: AudioEngine) {
         const handleLocClick = (e: Event) => {
             e.stopPropagation();
             e.preventDefault();
-            const location = (btn as HTMLElement).dataset.loc as 'bass' | 'mid' | 'high';
+            const location = (btn as HTMLElement).dataset.loc as 'bass' | 'mid' | 'treble';
             audio.setRangeLocation(location);
             rangeLocBtns.forEach(b => b.classList.remove('active'));
             btn.classList.add('active');

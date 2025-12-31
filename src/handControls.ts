@@ -5,8 +5,8 @@
  * - On iOS native app: Uses TrueDepth camera with Vision framework for accurate depth.
  * - On web: Uses MediaPipe Tasks Vision HandLandmarker (loaded lazily on enable).
  * - Two-hand "theremin-ish" mapping:
- *   - Left hand: resonance (height) + filter cutoff (palm orientation)
- *   - Right hand: pointer zone + pinch-pluck + reverb (pinch openness)
+ *   - Left hand: resonance (height) + filter cutoff (palm orientation) + reverb (pinch openness)
+ *   - Right hand: pointer zone + pinch-pluck
  *     - Pointer zone: hover shows target, pinch triggers pluck
  *     - Pinch-sustain: hold pinch to sustain note, release to stop
  */
@@ -222,17 +222,27 @@ async function getHandLandmarker(): Promise<HandLandmarker> {
         handLandmarkerPromise = (async () => {
             const { FilesetResolver, HandLandmarker } = await import('@mediapipe/tasks-vision');
             const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_BASE_URL);
-            return HandLandmarker.createFromOptions(vision, {
-                baseOptions: {
-                    modelAssetPath: HAND_LANDMARKER_MODEL_URL,
-                    delegate: 'GPU',
-                },
-                runningMode: 'VIDEO',
-                numHands: 2,
-                minHandDetectionConfidence: 0.5,
-                minHandPresenceConfidence: 0.5,
-                minTrackingConfidence: 0.5,
-            });
+
+            const create = async (delegate: 'GPU' | 'CPU') => {
+                return HandLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: HAND_LANDMARKER_MODEL_URL,
+                        delegate,
+                    },
+                    runningMode: 'VIDEO',
+                    numHands: 2,
+                    minHandDetectionConfidence: 0.5,
+                    minHandPresenceConfidence: 0.5,
+                    minTrackingConfidence: 0.5,
+                });
+            };
+
+            // Prefer GPU for performance, but gracefully fall back if unsupported.
+            try {
+                return await create('GPU');
+            } catch {
+                return create('CPU');
+            }
         })();
     }
     return handLandmarkerPromise;
@@ -308,6 +318,7 @@ export function initHandControls(audio: AudioEngine): void {
         filter?: {
             palmFacing: number | null;
             resonance: number | null;
+            pinchRatio: number | null;
         };
     };
 
@@ -372,6 +383,7 @@ export function initHandControls(audio: AudioEngine): void {
     let stream: MediaStream | null = null;
     let video: HTMLVideoElement | null = null;
     let rafId: number | null = null;
+    let lastVideoTime: number | null = null;
 
     // Tracking state
     let soundActive = false;
@@ -905,9 +917,12 @@ export function initHandControls(audio: AudioEngine): void {
             const distText = snapshot?.sound?.distM !== null && snapshot?.sound?.distM !== undefined
                 ? `${Math.round(snapshot.sound.distM * 100)}cm`
                 : '--';
-            const pinchText = snapshot?.sound?.pinchRatio !== null && snapshot?.sound?.pinchRatio !== undefined
-                ? `pinch ${snapshot.sound.pinchRatio.toFixed(2)}`
-                : 'pinch --';
+            const filterPinchText = snapshot?.filter?.pinchRatio !== null && snapshot?.filter?.pinchRatio !== undefined
+                ? `Lp ${snapshot.filter.pinchRatio.toFixed(2)}`
+                : 'Lp --';
+            const soundPinchText = snapshot?.sound?.pinchRatio !== null && snapshot?.sound?.pinchRatio !== undefined
+                ? `Rp ${snapshot.sound.pinchRatio.toFixed(2)}`
+                : 'Rp --';
 
             const ptrText = `ptr≤${Math.round(pointerZoneMaxM * 100)}cm`;
             const camFovText = `${Math.round(cameraFovDeg)}°`;
@@ -919,7 +934,7 @@ export function initHandControls(audio: AudioEngine): void {
                 ? `xy ${snapshot.sound.waveX.toFixed(2)},${snapshot.sound.pitchY.toFixed(2)}`
                 : 'xy --';
 
-            handVizLegend.innerHTML = `<span>${modeLabel} · hands ${handsCount} · F ${filterName} · S ${soundName} · ${palmText} · ${resText}</span><span>${soundActive ? 'on' : 'off'} · ${zoneLabel} · ${distText} · ${ptrText} · cam ${camFovText} · ${mapText} · ${xyText} · ${pinchText}</span>`;
+            handVizLegend.innerHTML = `<span>${modeLabel} · hands ${handsCount} · F ${filterName} · S ${soundName} · ${palmText} · ${resText} · ${filterPinchText}</span><span>${soundActive ? 'on' : 'off'} · ${zoneLabel} · ${distText} · ${ptrText} · cam ${camFovText} · ${mapText} · ${xyText} · ${soundPinchText}</span>`;
         }
     };
 
@@ -1329,6 +1344,7 @@ export function initHandControls(audio: AudioEngine): void {
         let soundWaveX: number | null = null;
         let soundPitchY: number | null = null;
         let soundPinchRatio: number | null = null;
+        let filterPinchRatio: number | null = null;
 
         // Find left and right hands
         const left = hands.find(h => h.handedness === 'Left') ?? null;
@@ -1352,7 +1368,7 @@ export function initHandControls(audio: AudioEngine): void {
         const hasSound = !!soundHand;
         let soundDistM: number | null = null;
 
-        // Left hand: resonance (height) + palm orientation → filter cutoff
+        // Left hand: resonance (height) + palm orientation → filter cutoff + pinch → reverb
         if (filterHand) {
             const rawRes = clamp(1 - filterHand.wristY, 0, 1);
             smoothResonance = ema(smoothResonance, rawRes, RESONANCE_EMA_ALPHA);
@@ -1362,9 +1378,35 @@ export function initHandControls(audio: AudioEngine): void {
                 smoothPalm = ema(smoothPalm, filterHand.palmFacing, PALM_EMA_ALPHA);
                 audio.setHandFilterMod(smoothPalm);
             }
+
+            // Pinch openness controls reverb (native provides pinchRatio directly)
+            filterPinchRatio = filterHand.pinchRatio;
+            const reverbRaw = clamp(
+                (filterHand.pinchRatio - PINCH_RATIO_REVERB_MIN) / (PINCH_RATIO_REVERB_MAX - PINCH_RATIO_REVERB_MIN),
+                0,
+                1
+            );
+            smoothReverb = ema(smoothReverb, reverbRaw, REVERB_EMA_ALPHA);
+
+            const wetT = smoothReverb ?? 0;
+            const wet = clamp(wetT * wetT * 0.85, 0, 0.85);
+            const wantsReverb = wet > 0.01;
+
+            if (wantsReverb && !reverbActive) {
+                audio.setReverbLevel('on');
+                reverbActive = true;
+            } else if (!wantsReverb && reverbActive) {
+                audio.setReverbLevel('off');
+                reverbActive = false;
+            }
+
+            if (reverbActive) {
+                const dry = 1 - wet * 0.4;
+                audio.setReverbParams(0, wet, dry);
+            }
         }
 
-        // Right hand: pointer zone + pinch pluck + reverb
+        // Right hand: pointer zone + pinch pluck
         if (soundHand) {
             const middleMcpX = soundHand.middleMcpX;
             const middleMcpY = soundHand.middleMcpY;
@@ -1372,6 +1414,7 @@ export function initHandControls(audio: AudioEngine): void {
             const viewXRaw = 1 - middleMcpX;
             const viewYRaw = middleMcpY;
 
+            // Use a stable palm point for position controls (so pinching doesn't shift pitch/shape too much).
             smoothSoundX = ema(smoothSoundX, middleMcpX, POS_EMA_ALPHA);
             smoothSoundY = ema(smoothSoundY, middleMcpY, POS_EMA_ALPHA);
 
@@ -1400,31 +1443,8 @@ export function initHandControls(audio: AudioEngine): void {
                 setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID, true);
             }
 
-            // Pinch controls reverb (native provides pinchRatio directly)
+            // Track pinch ratio for pluck gesture (not reverb - that's on left hand now)
             soundPinchRatio = soundHand.pinchRatio;
-            const reverbRaw = clamp(
-                (soundHand.pinchRatio - PINCH_RATIO_REVERB_MIN) / (PINCH_RATIO_REVERB_MAX - PINCH_RATIO_REVERB_MIN),
-                0,
-                1
-            );
-            smoothReverb = ema(smoothReverb, reverbRaw, REVERB_EMA_ALPHA);
-
-            const wetT = smoothReverb ?? 0;
-            const wet = clamp(wetT * wetT * 0.85, 0, 0.85);
-            const wantsReverb = wet > 0.01;
-
-            if (wantsReverb && !reverbActive) {
-                audio.setReverbLevel('on');
-                reverbActive = true;
-            } else if (!wantsReverb && reverbActive) {
-                audio.setReverbLevel('off');
-                reverbActive = false;
-            }
-
-            if (reverbActive) {
-                const dry = 1 - wet * 0.4;
-                audio.setReverbParams(0, wet, dry);
-            }
 
             // Pinch velocity (ratio units per second). Positive = closing.
             let pinchCloseVelPerS = 0;
@@ -1570,6 +1590,7 @@ export function initHandControls(audio: AudioEngine): void {
                 filter: {
                     palmFacing: smoothPalm,
                     resonance: smoothResonance,
+                    pinchRatio: filterPinchRatio,
                 }
             };
         }
@@ -1615,6 +1636,7 @@ export function initHandControls(audio: AudioEngine): void {
         reverbActive = false;
         smoothDistM = null;
         lostSoundFrames = 0;
+        lastVideoTime = null;
         pluckArmed = true;
         inPluckMode = false;
         inPointerHover = false;
@@ -1700,10 +1722,11 @@ export function initHandControls(audio: AudioEngine): void {
         let vizInPointerZone = false;
         let vizIsHovering = false;
         let vizPinchRatio: number | null = null;
+        let vizFilterPinchRatio: number | null = null;
         let vizWaveX: number | null = null;
         let vizPitchY: number | null = null;
 
-        // Left hand: resonance (height) + palm orientation → filter cutoff.
+        // Left hand: resonance (height) + palm orientation → filter cutoff + pinch → reverb.
         if (filterHand) {
             const wrist2d = filterHand.landmarks[0];
             if (wrist2d) {
@@ -1718,9 +1741,43 @@ export function initHandControls(audio: AudioEngine): void {
                 smoothPalm = ema(smoothPalm, palmFacing, PALM_EMA_ALPHA);
                 audio.setHandFilterMod(smoothPalm);
             }
+
+            // Pinch openness controls reverb
+            const filterThumbTip = filterHand.landmarks[4];
+            const filterIndexTip = filterHand.landmarks[8];
+            const filterWrist = filterHand.landmarks[0];
+            const filterMiddleMcp = filterHand.landmarks[9];
+            if (filterThumbTip && filterIndexTip && filterWrist && filterMiddleMcp) {
+                const filterHandScale = Math.max(0.0001, dist2D(filterWrist, filterMiddleMcp));
+                const filterPinchRatio = dist2D(filterThumbTip, filterIndexTip) / filterHandScale;
+                vizFilterPinchRatio = filterPinchRatio;
+                const reverbRaw = clamp(
+                    (filterPinchRatio - PINCH_RATIO_REVERB_MIN) / (PINCH_RATIO_REVERB_MAX - PINCH_RATIO_REVERB_MIN),
+                    0,
+                    1
+                );
+                smoothReverb = ema(smoothReverb, reverbRaw, REVERB_EMA_ALPHA);
+
+                const wetT = smoothReverb ?? 0;
+                const wet = clamp(wetT * wetT * 0.85, 0, 0.85);
+                const wantsReverb = wet > 0.01;
+
+                if (wantsReverb && !reverbActive) {
+                    audio.setReverbLevel('on');
+                    reverbActive = true;
+                } else if (!wantsReverb && reverbActive) {
+                    audio.setReverbLevel('off');
+                    reverbActive = false;
+                }
+
+                if (reverbActive) {
+                    const dry = 1 - wet * 0.4;
+                    audio.setReverbParams(0, wet, dry);
+                }
+            }
         }
 
-        // Right hand: pointer zone + pinch pluck + reverb.
+        // Right hand: pointer zone + pinch pluck.
         if (soundHand) {
             const thumbTip = soundHand.landmarks[4];
             const indexTip = soundHand.landmarks[8];
@@ -1761,33 +1818,10 @@ export function initHandControls(audio: AudioEngine): void {
                     setCursor(waveX * width, (1 - pitchY) * height, HAND_TOUCH_ID, true);
                 }
 
+                // Calculate pinch ratio for pluck gesture (not reverb - that's on left hand now)
                 const handScale = Math.max(0.0001, dist2D(wrist2d, middleMcp));
                 const pinchRatio = dist2D(thumbTip, indexTip) / handScale;
                 vizPinchRatio = pinchRatio;
-                const reverbRaw = clamp(
-                    (pinchRatio - PINCH_RATIO_REVERB_MIN) / (PINCH_RATIO_REVERB_MAX - PINCH_RATIO_REVERB_MIN),
-                    0,
-                    1
-                );
-                smoothReverb = ema(smoothReverb, reverbRaw, REVERB_EMA_ALPHA);
-
-                // Pinch controls reverb amount (wetness). Curve gives more precision at low values.
-                const wetT = smoothReverb ?? 0;
-                const wet = clamp(wetT * wetT * 0.85, 0, 0.85);
-                const wantsReverb = wet > 0.01;
-
-                if (wantsReverb && !reverbActive) {
-                    audio.setReverbLevel('on');
-                    reverbActive = true;
-                } else if (!wantsReverb && reverbActive) {
-                    audio.setReverbLevel('off');
-                    reverbActive = false;
-                }
-
-                if (reverbActive) {
-                    const dry = 1 - wet * 0.4;
-                    audio.setReverbParams(0, wet, dry);
-                }
 
                 // Pinch velocity (ratio units per second). Positive = closing.
                 let pinchCloseVelPerS = 0;
@@ -1931,6 +1965,7 @@ export function initHandControls(audio: AudioEngine): void {
                 filter: {
                     palmFacing: smoothPalm,
                     resonance: smoothResonance,
+                    pinchRatio: vizFilterPinchRatio,
                 }
             };
         }
@@ -1940,30 +1975,51 @@ export function initHandControls(audio: AudioEngine): void {
         if (!enabled) return;
         if (!video) return;
 
-        // Detect at most once per video frame.
         if (video.readyState >= 2) {
-            const landmarker = await getHandLandmarker();
-            const result = landmarker.detectForVideo(video, performance.now());
+            // Detect at most once per video frame.
+            const videoTime = video.currentTime;
+            if (lastVideoTime === null || videoTime !== lastVideoTime) {
+                lastVideoTime = videoTime;
 
-            if (result.landmarks.length === 0) {
-                lostSoundFrames += 1;
-                if (lostSoundFrames >= LOST_HAND_FRAMES_TO_RELEASE) stopHandVoice();
-                setStatus('show');
-                if (vizEnabled) {
-                    vizSnapshot = {
-                        source: 'mediapipe',
-                        hands: [],
-                        filterIndex: null,
-                        soundIndex: null,
-                    };
+                try {
+                    const landmarker = await getHandLandmarker();
+                    const result = landmarker.detectForVideo(video, performance.now());
+
+                    if (result.landmarks.length === 0) {
+                        lostSoundFrames += 1;
+                        if (lostSoundFrames >= LOST_HAND_FRAMES_TO_RELEASE) stopHandVoice();
+                        setStatus('show');
+                        if (vizEnabled) {
+                            vizSnapshot = {
+                                source: 'mediapipe',
+                                hands: [],
+                                filterIndex: null,
+                                soundIndex: null,
+                            };
+                        }
+                    } else {
+                        updateFromResult(result);
+                    }
+                } catch (err) {
+                    enabled = false;
+                    teardownCamera();
+                    const msg = err instanceof Error ? err.name : 'err';
+                    setStatus('error', msg);
+                    return;
                 }
-            } else {
-                updateFromResult(result);
             }
         } else {
             setStatus('loading');
             if (vizEnabled) {
                 vizSnapshot = null;
+            }
+        }
+
+        // Safety: force release if sound hasn't been updated recently (e.g., stalled video frames).
+        if (soundActive && soundLastUpdateMs > 0) {
+            const staleDuration = Date.now() - soundLastUpdateMs;
+            if (staleDuration >= STALE_UPDATE_TIMEOUT_MS) {
+                stopHandVoice(PLUCK_RELEASE_S);
             }
         }
 
