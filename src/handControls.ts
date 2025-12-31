@@ -90,7 +90,7 @@ const REVERB_EMA_ALPHA = 0.25;
 
 // Hand "shake" detection (for vibrato): based on high acceleration of the control point.
 // Scale converts view-space accel (0..1 per s^2) to device-like "shake" magnitude.
-const DEFAULT_HAND_SHAKE_SENSITIVITY = 6.0;
+const DEFAULT_HAND_SHAKE_SENSITIVITY = 1.5;
 const MIN_HAND_SHAKE_SENSITIVITY = 0.5;
 const MAX_HAND_SHAKE_SENSITIVITY = 12.0;
 const HAND_SHAKE_EMA_ALPHA = 0.25;
