@@ -22,6 +22,9 @@ export const DELAY_FEEDBACK_NORMAL = 0.25;
 /** Delay feedback gain (shake triggered) */
 export const DELAY_FEEDBACK_SHAKE = 0.6;
 
+/** Delay wet mix (0..1). Lower values reduce "echo-y" retriggers on short plucks. */
+export const DELAY_WET_MIX = 0.12;
+
 /** Shake trigger duration in ms */
 export const SHAKE_DURATION_MS = 300;
 

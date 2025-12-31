@@ -9,6 +9,7 @@ import {
     DELAY_TIME_RIGHT,
     DELAY_FEEDBACK_NORMAL,
     DELAY_FEEDBACK_SHAKE,
+    DELAY_WET_MIX,
     SHAKE_DURATION_MS,
     FILTER_MIN_FREQ,
     FILTER_MAX_FREQ,
@@ -67,6 +68,7 @@ export class AudioEngine {
     filter: BiquadFilterNode | null = null;
     panner: StereoPannerNode | null = null;
     delayFeedback: GainNode | null = null;
+    private delayWetGain: GainNode | null = null;
     analyser: AnalyserNode | null = null;
     isPlaying = false;
     dataArray: Float32Array | null = null;
@@ -177,9 +179,11 @@ export class AudioEngine {
         const delayL = this.ctx.createDelay();
         const delayR = this.ctx.createDelay();
         this.delayFeedback = this.ctx.createGain();
+        this.delayWetGain = this.ctx.createGain();
         delayL.delayTime.value = DELAY_TIME_LEFT;
         delayR.delayTime.value = DELAY_TIME_RIGHT;
         this.delayFeedback.gain.value = DELAY_FEEDBACK_NORMAL;
+        this.delayWetGain.gain.value = DELAY_WET_MIX;
 
         // Routing with reverb
         // Signal flow: Filter → Panner → [Dry/Wet split] → MasterGain → Analyser → Destination
@@ -208,8 +212,9 @@ export class AudioEngine {
         delayR.connect(this.delayFeedback);
         this.delayFeedback.connect(delayL);
         this.delayFeedback.connect(delayR);
-        delayL.connect(this.analyser);
-        delayR.connect(this.analyser);
+        delayL.connect(this.delayWetGain);
+        delayR.connect(this.delayWetGain);
+        this.delayWetGain.connect(this.analyser);
 
         this.initMode();
     }
