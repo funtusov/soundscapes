@@ -4,8 +4,9 @@
   "description": "An interactive audio-visual synthesizer instrument for touch devices.",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
+    "dev": "npm run mediapipe:assets && vite",
+    "mediapipe:assets": "node scripts/prepare-mediapipe-assets.mjs",
+    "build": "npm run mediapipe:assets && tsc && vite build",
     "preview": "vite preview",
     "deploy": "npm run build && netlify deploy --prod --dir=dist",
     "typecheck": "tsc --noEmit",

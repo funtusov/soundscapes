@@ -73,8 +73,14 @@ const HAND_EDGES: ReadonlyArray<readonly [number, number]> = [
 const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 // Keep these pinned for reproducibility (matches package.json dependency).
-const MEDIAPIPE_WASM_BASE_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm';
-const HAND_LANDMARKER_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+// Prefer local assets (served from `public/mediapipe/...`) but fall back to CDN.
+const LOCAL_WASM_BASE_URL = `${import.meta.env.BASE_URL}mediapipe/wasm`;
+const CDN_WASM_BASE_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm';
+const LOCAL_HAND_LANDMARKER_MODEL_URL = `${import.meta.env.BASE_URL}mediapipe/models/hand_landmarker.task`;
+const CDN_HAND_LANDMARKER_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+
+const WASM_BASE_URLS = [LOCAL_WASM_BASE_URL, CDN_WASM_BASE_URL] as const;
+const HAND_LANDMARKER_MODEL_URLS = [LOCAL_HAND_LANDMARKER_MODEL_URL, CDN_HAND_LANDMARKER_MODEL_URL] as const;
 
 // Fewer frames on mobile since tracking can be spottier.
 const LOST_HAND_FRAMES_TO_RELEASE = IS_MOBILE ? 4 : 6;
@@ -221,12 +227,12 @@ async function getHandLandmarker(): Promise<HandLandmarker> {
     if (!handLandmarkerPromise) {
         handLandmarkerPromise = (async () => {
             const { FilesetResolver, HandLandmarker } = await import('@mediapipe/tasks-vision');
-            const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_BASE_URL);
 
-            const create = async (delegate: 'GPU' | 'CPU') => {
+            const createLandmarker = async (wasmBaseUrl: string, modelAssetPath: string, delegate: 'GPU' | 'CPU') => {
+                const vision = await FilesetResolver.forVisionTasks(wasmBaseUrl);
                 return HandLandmarker.createFromOptions(vision, {
                     baseOptions: {
-                        modelAssetPath: HAND_LANDMARKER_MODEL_URL,
+                        modelAssetPath,
                         delegate,
                     },
                     runningMode: 'VIDEO',
@@ -237,12 +243,20 @@ async function getHandLandmarker(): Promise<HandLandmarker> {
                 });
             };
 
-            // Prefer GPU for performance, but gracefully fall back if unsupported.
-            try {
-                return await create('GPU');
-            } catch {
-                return create('CPU');
+            let lastErr: unknown = null;
+            for (const delegate of ['GPU', 'CPU'] as const) {
+                for (const wasmBaseUrl of WASM_BASE_URLS) {
+                    for (const modelAssetPath of HAND_LANDMARKER_MODEL_URLS) {
+                        try {
+                            return await createLandmarker(wasmBaseUrl, modelAssetPath, delegate);
+                        } catch (err) {
+                            lastErr = err;
+                        }
+                    }
+                }
             }
+
+            throw lastErr instanceof Error ? lastErr : new Error('hand_landmarker_init_failed');
         })();
     }
     return handLandmarkerPromise;
@@ -383,7 +397,36 @@ export function initHandControls(audio: AudioEngine): void {
     let stream: MediaStream | null = null;
     let video: HTMLVideoElement | null = null;
     let rafId: number | null = null;
+    let videoFrameCallbackId: number | null = null;
     let lastVideoTime: number | null = null;
+    let staleWatchdogId: number | null = null;
+
+    type WorkerInMessage =
+        | {
+            type: 'init';
+            wasmBaseUrls: string[];
+            modelAssetPaths: string[];
+            numHands: number;
+            minHandDetectionConfidence: number;
+            minHandPresenceConfidence: number;
+            minTrackingConfidence: number;
+        }
+        | {
+            type: 'detect';
+            frame: ImageBitmap | VideoFrame;
+            timestamp: number;
+        };
+
+    type WorkerOutMessage =
+        | { type: 'ready' }
+        | { type: 'result'; result: unknown }
+        | { type: 'error'; error: string };
+
+    let landmarkerWorker: Worker | null = null;
+    let workerReady = false;
+    let workerInFlight = false;
+    let useWorker = false;
+    let detectInFlight = false;
 
     // Tracking state
     let soundActive = false;
@@ -445,6 +488,23 @@ export function initHandControls(audio: AudioEngine): void {
         smoothHandVibratoHz = null;
         audio.setHandShake(0);
         audio.setHandVibratoHz(0);
+    };
+
+    const startStaleWatchdog = () => {
+        if (staleWatchdogId !== null) return;
+        staleWatchdogId = window.setInterval(() => {
+            if (!soundActive || soundLastUpdateMs <= 0) return;
+            const staleDuration = Date.now() - soundLastUpdateMs;
+            if (staleDuration >= STALE_UPDATE_TIMEOUT_MS) {
+                stopHandVoice(PLUCK_RELEASE_S);
+            }
+        }, 50);
+    };
+
+    const stopStaleWatchdog = () => {
+        if (staleWatchdogId === null) return;
+        clearInterval(staleWatchdogId);
+        staleWatchdogId = null;
     };
 
     const updateHandMotion = (viewX: number, viewY: number, nowMs: number): { shake: number; vibratoHz: number } => {
@@ -1603,10 +1663,17 @@ export function initHandControls(audio: AudioEngine): void {
     const teardownCamera = () => {
         setVizEnabled(false);
         vizSnapshot = null;
+        stopStaleWatchdog();
         if (rafId !== null) {
             cancelAnimationFrame(rafId);
             rafId = null;
         }
+        if (videoFrameCallbackId !== null && video) {
+            const v = video as unknown as { cancelVideoFrameCallback?: (handle: number) => void };
+            try { v.cancelVideoFrameCallback?.(videoFrameCallbackId); } catch { /* ignore */ }
+            videoFrameCallbackId = null;
+        }
+        stopLandmarkerWorker();
         stopHandVoice();
 
         // Clean up native listener
@@ -1661,6 +1728,144 @@ export function initHandControls(audio: AudioEngine): void {
         const el = ensureVideoElement();
         el.srcObject = stream;
         await el.play();
+    };
+
+    const stopLandmarkerWorker = () => {
+        if (landmarkerWorker) {
+            try { landmarkerWorker.terminate(); } catch { /* ignore */ }
+        }
+        landmarkerWorker = null;
+        workerReady = false;
+        workerInFlight = false;
+        useWorker = false;
+    };
+
+    const initLandmarkerWorker = async (): Promise<boolean> => {
+        if (IS_MOBILE) return false;
+
+        stopLandmarkerWorker();
+
+        let worker: Worker;
+        try {
+            worker = new Worker(new URL('./handLandmarkerWorker.ts', import.meta.url), { type: 'module' });
+        } catch {
+            return false;
+        }
+
+        landmarkerWorker = worker;
+        workerReady = false;
+        workerInFlight = false;
+        useWorker = false;
+
+        return new Promise<boolean>((resolve) => {
+            let settled = false;
+            const settle = (ok: boolean) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeoutId);
+                resolve(ok);
+            };
+
+            const timeoutId = window.setTimeout(() => {
+                stopLandmarkerWorker();
+                settle(false);
+            }, 6000);
+
+            const onMessage = (ev: MessageEvent<WorkerOutMessage>) => {
+                const data = ev.data;
+                if (!data || typeof data !== 'object') return;
+
+                if (data.type === 'ready') {
+                    workerReady = true;
+                    useWorker = true;
+                    settle(true);
+                    return;
+                }
+
+                if (data.type === 'result') {
+                    workerInFlight = false;
+                    try {
+                        updateFromResult(data.result as HandLandmarkerResult);
+                    } catch (err) {
+                        console.warn('hand worker result failed', err);
+                    }
+                    return;
+                }
+
+                if (data.type === 'error') {
+                    workerInFlight = false;
+                    console.warn('hand landmarker worker error', data.error);
+                    stopLandmarkerWorker();
+                    settle(false);
+                }
+            };
+
+            const onError = () => {
+                workerInFlight = false;
+                stopLandmarkerWorker();
+                settle(false);
+            };
+
+            worker.addEventListener('message', onMessage);
+            worker.addEventListener('error', onError);
+
+            const initMsg: WorkerInMessage = {
+                type: 'init',
+                wasmBaseUrls: [...WASM_BASE_URLS],
+                modelAssetPaths: [...HAND_LANDMARKER_MODEL_URLS],
+                numHands: 2,
+                minHandDetectionConfidence: 0.5,
+                minHandPresenceConfidence: 0.5,
+                minTrackingConfidence: 0.5,
+            };
+
+            worker.postMessage(initMsg);
+        });
+    };
+
+    const tryWorkerDetectForVideo = (timestamp: number) => {
+        if (!useWorker || !workerReady || !landmarkerWorker || !video) return;
+        if (workerInFlight) return;
+        if (video.readyState < 2) return;
+        workerInFlight = true;
+
+        const worker = landmarkerWorker;
+        void (async () => {
+            let frame: ImageBitmap | VideoFrame;
+            const VideoFrameCtor = (globalThis as unknown as { VideoFrame?: new (src: CanvasImageSource) => VideoFrame }).VideoFrame;
+            if (VideoFrameCtor) {
+                frame = new VideoFrameCtor(video);
+            } else {
+                frame = await createImageBitmap(video);
+            }
+
+            const msg: WorkerInMessage = { type: 'detect', frame, timestamp };
+            worker.postMessage(msg, [frame as unknown as Transferable]);
+        })().catch((err) => {
+            workerInFlight = false;
+            console.warn('hand landmarker worker detect failed', err);
+            stopLandmarkerWorker();
+        });
+    };
+
+    const detectOnMainThread = async (timestamp: number) => {
+        if (!video) return;
+        if (detectInFlight) return;
+        if (video.readyState < 2) return;
+
+        detectInFlight = true;
+        try {
+            const landmarker = await getHandLandmarker();
+            const result = landmarker.detectForVideo(video, timestamp);
+            updateFromResult(result);
+        } catch (err) {
+            enabled = false;
+            teardownCamera();
+            const msg = err instanceof Error ? err.name : 'err';
+            setStatus('error', msg);
+        } finally {
+            detectInFlight = false;
+        }
     };
 
     const updateFromResult = (result: HandLandmarkerResult) => {
@@ -1969,9 +2174,24 @@ export function initHandControls(audio: AudioEngine): void {
                 }
             };
         }
+
+        if (vizEnabled) {
+            drawHandViz();
+        }
     };
 
-    const loop = async () => {
+    const processWebFrame = (timestamp: number) => {
+        if (useWorker) {
+            tryWorkerDetectForVideo(timestamp);
+            if (!useWorker) {
+                void detectOnMainThread(timestamp);
+            }
+        } else {
+            void detectOnMainThread(timestamp);
+        }
+    };
+
+    const loopRaf = () => {
         if (!enabled) return;
         if (!video) return;
 
@@ -1980,54 +2200,40 @@ export function initHandControls(audio: AudioEngine): void {
             const videoTime = video.currentTime;
             if (lastVideoTime === null || videoTime !== lastVideoTime) {
                 lastVideoTime = videoTime;
-
-                try {
-                    const landmarker = await getHandLandmarker();
-                    const result = landmarker.detectForVideo(video, performance.now());
-
-                    if (result.landmarks.length === 0) {
-                        lostSoundFrames += 1;
-                        if (lostSoundFrames >= LOST_HAND_FRAMES_TO_RELEASE) stopHandVoice();
-                        setStatus('show');
-                        if (vizEnabled) {
-                            vizSnapshot = {
-                                source: 'mediapipe',
-                                hands: [],
-                                filterIndex: null,
-                                soundIndex: null,
-                            };
-                        }
-                    } else {
-                        updateFromResult(result);
-                    }
-                } catch (err) {
-                    enabled = false;
-                    teardownCamera();
-                    const msg = err instanceof Error ? err.name : 'err';
-                    setStatus('error', msg);
-                    return;
-                }
+                processWebFrame(performance.now());
             }
         } else {
             setStatus('loading');
             if (vizEnabled) {
                 vizSnapshot = null;
+                drawHandViz();
             }
         }
 
-        // Safety: force release if sound hasn't been updated recently (e.g., stalled video frames).
-        if (soundActive && soundLastUpdateMs > 0) {
-            const staleDuration = Date.now() - soundLastUpdateMs;
-            if (staleDuration >= STALE_UPDATE_TIMEOUT_MS) {
-                stopHandVoice(PLUCK_RELEASE_S);
-            }
+        rafId = requestAnimationFrame(loopRaf);
+    };
+
+    const startMediaPipeLoop = () => {
+        if (!video) return;
+        lastVideoTime = null;
+
+        const v = video as unknown as {
+            requestVideoFrameCallback?: (cb: (now: number, meta: unknown) => void) => number;
+        };
+
+        if (typeof v.requestVideoFrameCallback === 'function') {
+            const request = v.requestVideoFrameCallback.bind(video) as (cb: (now: number, meta: unknown) => void) => number;
+            const onVideoFrame = (now: number, _meta: unknown) => {
+                if (!enabled) return;
+                if (!video) return;
+                processWebFrame(now);
+                videoFrameCallbackId = request(onVideoFrame);
+            };
+            videoFrameCallbackId = request(onVideoFrame);
+            return;
         }
 
-        if (vizEnabled) {
-            drawHandViz();
-        }
-
-        rafId = requestAnimationFrame(() => { void loop(); });
+        rafId = requestAnimationFrame(loopRaf);
     };
 
     const enableNative = async (): Promise<boolean> => {
@@ -2057,6 +2263,7 @@ export function initHandControls(audio: AudioEngine): void {
         handBtn.disabled = true;
         if (handVizBtn) handVizBtn.disabled = true;
         setStatus('loading');
+        startStaleWatchdog();
 
         try {
             // Try native TrueDepth first (iOS only)
@@ -2070,12 +2277,18 @@ export function initHandControls(audio: AudioEngine): void {
 
             // Fall back to MediaPipe for web
             await startCamera();
-            // Warm up model load in parallel with camera.
-            void getHandLandmarker();
+
+            // Prefer worker inference on desktop; fall back to main thread if unsupported.
+            const workerStarted = await initLandmarkerWorker();
+            if (!workerStarted) {
+                // Warm up model load in parallel with camera.
+                void getHandLandmarker();
+            }
+
             handBtn.disabled = false;
             if (handVizBtn) handVizBtn.disabled = false;
             setStatus('show');
-            rafId = requestAnimationFrame(() => { void loop(); });
+            startMediaPipeLoop();
         } catch (err) {
             enabled = false;
             teardownCamera();
