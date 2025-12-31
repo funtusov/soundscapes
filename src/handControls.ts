@@ -90,7 +90,9 @@ const REVERB_EMA_ALPHA = 0.25;
 
 // Hand "shake" detection (for vibrato): based on high acceleration of the control point.
 // Scale converts view-space accel (0..1 per s^2) to device-like "shake" magnitude.
-const HAND_SHAKE_ACCEL_SCALE = 0.3;
+const DEFAULT_HAND_SHAKE_SENSITIVITY = 3.0;
+const MIN_HAND_SHAKE_SENSITIVITY = 0.5;
+const MAX_HAND_SHAKE_SENSITIVITY = 6.0;
 const HAND_SHAKE_EMA_ALPHA = 0.25;
 
 // Right-hand pinch openness → reverb (0..1)
@@ -251,6 +253,8 @@ export function initHandControls(audio: AudioEngine): void {
     const pinchRearmValue = document.getElementById('pinchRearmValue') as HTMLElement | null;
     const pinchVelSlider = document.getElementById('pinchVelSlider') as HTMLInputElement | null;
     const pinchVelValue = document.getElementById('pinchVelValue') as HTMLElement | null;
+    const handVibSensSlider = document.getElementById('handVibSensSlider') as HTMLInputElement | null;
+    const handVibSensValue = document.getElementById('handVibSensValue') as HTMLElement | null;
 
     const canUseCamera = !!navigator.mediaDevices?.getUserMedia;
     if (!canUseCamera) {
@@ -262,6 +266,7 @@ export function initHandControls(audio: AudioEngine): void {
         if (pinchCloseSlider) pinchCloseSlider.disabled = true;
         if (pinchRearmSlider) pinchRearmSlider.disabled = true;
         if (pinchVelSlider) pinchVelSlider.disabled = true;
+        if (handVibSensSlider) handVibSensSlider.disabled = true;
         handVal.textContent = 'n/a';
         return;
     }
@@ -311,6 +316,7 @@ export function initHandControls(audio: AudioEngine): void {
     let pluckPinchClosedRatio = PLUCK_PINCH_CLOSED_RATIO;
     let pluckPinchRearmRatio = PLUCK_PINCH_REARM_RATIO;
     let pluckPinchCloseMinPerS = PLUCK_PINCH_CLOSE_MIN_PER_S;
+    let handShakeSensitivity = DEFAULT_HAND_SHAKE_SENSITIVITY;
 
     const MIN_VIEW_MAPPING_SPAN = 0.1;
     const clampViewMappingRect = (rect: ViewMappingRect): ViewMappingRect => {
@@ -444,7 +450,7 @@ export function initHandControls(audio: AudioEngine): void {
         shakePrevVx = vx;
         shakePrevVy = vy;
 
-        const shake = clamp(acc * HAND_SHAKE_ACCEL_SCALE, 0, 30);
+        const shake = clamp(acc * handShakeSensitivity, 0, 30);
         smoothHandShake = ema(smoothHandShake, shake, HAND_SHAKE_EMA_ALPHA);
         return smoothHandShake;
     };
@@ -894,6 +900,18 @@ export function initHandControls(audio: AudioEngine): void {
         }
     };
 
+    const setHandShakeSensitivity = (sens: number) => {
+        const sensClamped = clamp(sens, MIN_HAND_SHAKE_SENSITIVITY, MAX_HAND_SHAKE_SENSITIVITY);
+        handShakeSensitivity = sensClamped;
+
+        if (handVibSensSlider) handVibSensSlider.value = String(Math.round(handShakeSensitivity * 100));
+        if (handVibSensValue) handVibSensValue.textContent = `${handShakeSensitivity.toFixed(1)}×`;
+
+        if (vizEnabled) {
+            drawHandViz();
+        }
+    };
+
     const initMappingDrag = () => {
         if (!handVizCanvas) return;
 
@@ -1168,12 +1186,19 @@ export function initHandControls(audio: AudioEngine): void {
             });
         }
 
+        if (handVibSensSlider) {
+            handVibSensSlider.addEventListener('input', () => {
+                setHandShakeSensitivity(parseInt(handVibSensSlider.value, 10) / 100);
+            });
+        }
+
         // Initialize from defaults (clamped to slider min/max).
         setZoneSettings(Math.round(DEFAULT_POINTER_ZONE_MAX_M * 100));
         setCameraFov(DEFAULT_CAMERA_FOV_DEG);
         setPluckPinchClosedRatio(PLUCK_PINCH_CLOSED_RATIO);
         setPluckPinchRearmRatio(PLUCK_PINCH_REARM_RATIO);
         setPluckPinchCloseMinPerS(PLUCK_PINCH_CLOSE_MIN_PER_S);
+        setHandShakeSensitivity(DEFAULT_HAND_SHAKE_SENSITIVITY);
     };
 
     initZoneControls();
@@ -1247,6 +1272,9 @@ export function initHandControls(audio: AudioEngine): void {
         if (soundHand) {
             const middleMcpX = soundHand.middleMcpX;
             const middleMcpY = soundHand.middleMcpY;
+
+            const viewXRaw = 1 - middleMcpX;
+            const viewYRaw = middleMcpY;
 
             smoothSoundX = ema(smoothSoundX, middleMcpX, POS_EMA_ALPHA);
             smoothSoundY = ema(smoothSoundY, middleMcpY, POS_EMA_ALPHA);
@@ -1382,7 +1410,7 @@ export function initHandControls(audio: AudioEngine): void {
                     }
                 } else {
                     const duration = (Date.now() - soundStartMs) / 1000;
-                    const shake = updateHandShake(viewX, viewY, nowMs);
+                    const shake = updateHandShake(viewXRaw, viewYRaw, nowMs);
                     audio.setHandShake(shake);
                     audio.update(waveX, pitchY, HAND_TOUCH_ID, duration);
                     soundLastUpdateMs = Date.now();
@@ -1603,6 +1631,9 @@ export function initHandControls(audio: AudioEngine): void {
             const middleMcp = soundHand.landmarks[9];
 
             if (thumbTip && indexTip && wrist2d && middleMcp) {
+                const viewXRaw = 1 - middleMcp.x;
+                const viewYRaw = middleMcp.y;
+
                 // Use a stable palm point for position controls (so pinching doesn't shift pitch/shape too much).
                 smoothSoundX = ema(smoothSoundX, middleMcp.x, POS_EMA_ALPHA);
                 smoothSoundY = ema(smoothSoundY, middleMcp.y, POS_EMA_ALPHA);
@@ -1743,7 +1774,7 @@ export function initHandControls(audio: AudioEngine): void {
                         }
                     } else {
                         const duration = (Date.now() - soundStartMs) / 1000;
-                        const shake = updateHandShake(viewX, viewY, nowMs);
+                        const shake = updateHandShake(viewXRaw, viewYRaw, nowMs);
                         audio.setHandShake(shake);
                         audio.update(waveX, pitchY, HAND_TOUCH_ID, duration);
                         soundLastUpdateMs = Date.now();

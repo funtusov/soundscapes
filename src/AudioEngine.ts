@@ -128,6 +128,7 @@ export class AudioEngine {
     private handAttackSeconds: number | null = null;
     private handReleaseSeconds: number | null = null;
     private handShake: number = 0;
+    private motionLabelBase: string = '--';
 
     constructor() {
         // Silent audio for iOS unlock
@@ -263,6 +264,32 @@ export class AudioEngine {
         };
     }
 
+    private renderMotionLabel(): void {
+        const motionEl = document.getElementById('val-motion');
+        if (!motionEl) return;
+
+        // Capture whatever initDeviceOrientation set as a baseline ("auto", permissions, etc.)
+        if (!this.motionLabelBase || this.motionLabelBase === '--') {
+            const current = (motionEl.innerText || '').trim();
+            if (current) this.motionLabelBase = current;
+        }
+
+        const handVibActive = this.handShake > SHAKE_ACCELERATION_THRESHOLD;
+        const deviceShakeActive = this.orientationParams.shake > SHAKE_ACCELERATION_THRESHOLD;
+
+        if (handVibActive && deviceShakeActive) {
+            motionEl.innerText = 'VIB/TR+SHAKE';
+            return;
+        }
+
+        if (handVibActive) {
+            motionEl.innerText = 'VIB/TR';
+            return;
+        }
+
+        motionEl.innerText = this.motionLabelBase;
+    }
+
     /** Hand (webcam): set attack time (seconds) for the next onset. */
     setHandAttackSeconds(seconds: number): void {
         this.handAttackSeconds = seconds;
@@ -276,6 +303,7 @@ export class AudioEngine {
     /** Hand (webcam): set shake intensity for vibrato/tremolo modulation (0..~20). */
     setHandShake(shake: number): void {
         this.handShake = clamp(shake, 0, 30);
+        this.renderMotionLabel();
     }
 
     initMode(): void {
@@ -1176,8 +1204,8 @@ export class AudioEngine {
 
             const motionLabel = accMagnitude > SHAKE_ACCELERATION_THRESHOLD ? 'SHAKE!' :
                                accMagnitude > 1.5 ? 'Active' : 'Steady';
-            const motionEl = document.getElementById('val-motion');
-            if (motionEl) motionEl.innerText = motionLabel;
+            this.motionLabelBase = motionLabel;
+            this.renderMotionLabel();
         }
     }
 }
